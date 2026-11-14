@@ -35,10 +35,14 @@
     // Recommended Options
     "strict": true,
     "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM"],
+    "rootDir": "./src",
+    "noEmit": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "noUncheckedSideEffectImports": true,
     "moduleDetection": "force",
     "skipLibCheck": true,
-  }
+  },
+  "include": ["src/**/*.ts"]
 }

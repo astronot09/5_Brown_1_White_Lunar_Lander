@@ -1,0 +1,9 @@
+{
+  "siteId": "synthetic-south-pole",
+  "name": "Synthetic South Pole Test Site",
+  "latitudeDeg": -90,
+  "longitudeDeg": 73,
+  "siteElevationM": 0,
+  "horizonAzimuthStepDeg": 90,
+  "horizonElevationDeg": [0, 0, 0, 0]
+}
