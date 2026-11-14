@@ -1,0 +1,105 @@
+.lunar-chart-panel {
+  --chart-text: #e8f0f4;
+  --chart-muted: #8ea4b3;
+  --chart-grid: rgba(153, 180, 196, .16);
+  color: var(--chart-text);
+  background: #111c27;
+  border: 1px solid rgba(145, 174, 192, .2);
+  border-radius: 16px;
+  padding: 16px 18px 14px;
+  text-align: left;
+  font: 13px/1.45 Inter, ui-sans-serif, system-ui, sans-serif;
+  min-width: 0;
+}
+.lunar-chart-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
+.lunar-chart-eyebrow { margin: 0 0 3px; color: #89a5b7; font-size: 10px; font-weight: 700; letter-spacing: .12em; }
+.lunar-chart-heading h3 { margin: 0; color: var(--chart-text); font-size: 17px; font-weight: 600; }
+.lunar-chart-meta { color: var(--chart-muted); font-size: 11px; text-transform: capitalize; text-align: right; }
+.lunar-chart-svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart-grid line { stroke: var(--chart-grid); stroke-dasharray: 2 4; }
+.chart-grid path, .chart-axis path, .chart-axis line { stroke: rgba(160, 184, 198, .35); }
+.chart-grid text, .chart-axis text { fill: #94a9b7; font-size: 10px; }
+.chart-axis-label, .timeline-y-unit { fill: #9bb0bd; font-size: 10px; }
+.chart-empty { fill: #a6b8c3; font-size: 13px; }
+.skyline-area { fill: rgba(116, 151, 171, .32); }
+.skyline-line { fill: none; stroke: #9cb9c8; stroke-width: 1.6; }
+.skyline-envelope { fill: rgba(185, 202, 213, .2); }
+.skyline-zero { stroke: rgba(226, 236, 241, .42); stroke-dasharray: 4 4; }
+.sky-body circle { stroke: #0e1822; stroke-width: 2; }
+.sky-body text { fill: #f1f5f7; font-size: 11px; font-weight: 700; paint-order: stroke; stroke: #111c27; stroke-width: 3px; stroke-linejoin: round; }
+.sky-sun circle { fill: #f6bd60; }
+.sky-earth circle { fill: #73c8e0; }
+.chart-legend text { fill: #a7bac5; font-size: 9px; }
+.legend-terrain { fill: #9cb9c8; }
+.legend-sun { fill: #f6bd60; }
+.legend-earth { fill: #73c8e0; }
+.legend-envelope { fill: rgba(185,202,213,.6); }
+.lunar-chart-footnote { margin: 7px 0 0; color: #8298a7; font-size: 10px; line-height: 1.5; }
+.timeline-readout { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; padding: 9px 11px; margin: 10px 0 3px; border: 1px solid rgba(153,180,196,.16); border-radius: 9px; background: rgba(25,42,55,.72); }
+.timeline-readout strong { width: 100%; color: #eaf2f6; font-size: 12px; }
+.timeline-readout span { color: #9fb2be; font-size: 11px; }
+.irradiance-area { fill: rgba(246, 189, 96, .13); }
+.irradiance-line { fill: none; stroke: #f6bd60; stroke-width: 2; }
+.timeline-sunlight rect { fill: #d9a74f; opacity: .9; }
+.earth-clearance-cell.is-clear { fill: #69b9d2; opacity: .95; }
+.earth-clearance-cell.is-blocked { fill: #7d6470; opacity: .48; }
+.timeline-cursor { stroke: #f5f1e8; stroke-width: 1; stroke-dasharray: 3 3; }
+.timeline-cursor-dot { fill: #f5f1e8; stroke: #172633; stroke-width: 2; }
+.timeline-strip-label { fill: #8fa5b3; font-size: 8px; font-weight: 700; letter-spacing: .08em; }
+.timeline-scrubber { display: grid; grid-template-columns: auto minmax(80px, 1fr) auto; align-items: center; gap: 12px; margin: 8px 0 10px; }
+.timeline-scrubber label, .timeline-scrubber span { color: #9db1bd; font-size: 11px; }
+.timeline-scrubber input { width: 100%; accent-color: #f6bd60; cursor: ew-resize; }
+.timeline-scrubber input:focus-visible { outline: 2px solid #79c7df; outline-offset: 4px; }
+.timeline-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 9px 0; border-top: 1px solid rgba(153,180,196,.14); }
+.timeline-legend span { display: inline-flex; align-items: center; gap: 6px; color: #9db1bd; font-size: 10px; }
+.timeline-legend i { display: inline-block; width: 14px; height: 3px; border-radius: 3px; }
+.legend-irradiance { background: #f6bd60; }
+.legend-sunlight { background: #d9a74f; }
+.legend-dte { background: #69b9d2; }
+.timeline-events { margin-top: 3px; border-top: 1px solid rgba(153,180,196,.14); padding-top: 9px; color: #a7bac5; font-size: 11px; }
+.timeline-events summary { cursor: pointer; color: #c4d2da; }
+.timeline-events ol { display: grid; gap: 6px; max-height: 180px; overflow: auto; padding-left: 18px; }
+.timeline-events li { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.timeline-events time { color: #8299a8; }
+.timeline-events .event-sun span { color: #e8c17d; }
+.timeline-events .event-earth span { color: #83cce0; }
+@media (max-width: 600px) {
+  .lunar-chart-panel { padding: 13px 11px; }
+  .timeline-readout { gap: 5px 9px; }
+  .timeline-scrubber { grid-template-columns: 1fr auto; }
+  .timeline-scrubber label { grid-column: 1 / -1; }
+}
+
+.skyline-dte { fill: none; stroke: #70b8cf; stroke-width: 1.2; stroke-dasharray: 5 4; opacity: .9; }
+.sky-track { fill: none; stroke-width: 1.4; stroke-dasharray: 3 3; opacity: .8; }
+.sun-track { stroke: #f6bd60; }
+.earth-track { stroke: #73c8e0; }
+.track-tick-sun-track { fill: #f6bd60; }
+.track-tick-earth-track { fill: #73c8e0; }
+.sky-sun ellipse { fill: rgba(246,189,96,.28); stroke: #f6bd60; stroke-width: 1; }
+.sky-earth ellipse { fill: rgba(115,200,224,.24); stroke: #73c8e0; stroke-width: 1; }
+.legend-dte, .legend-earth-track { fill: #73c8e0; }
+.legend-sun-track { fill: #f6bd60; }
+
+.track-label { fill: #b7c7d0; font-size: 8px; paint-order: stroke; stroke: #111c27; stroke-width: 2px; stroke-linejoin: round; }
+
+.timeline-operations rect { fill: #91b58e; opacity: .9; }
+.legend-ops { background: #91b58e; }
+
+.power-index-line { fill: none; stroke: #a6c18d; stroke-width: 1.5; stroke-dasharray: 5 3; }
+.power-index-axis text { fill: #a6c18d; }
+.legend-power-index { background: #a6c18d; }
+
+.horizon-text-values { margin-top: 5px; color: #9db1bd; font-size: 10px; }
+.horizon-text-values summary { cursor: pointer; color: #c4d2da; }
+.horizon-text-values ul { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 4px 12px; padding-left: 18px; }
+
+.skyline-legend { display: flex; flex-wrap: wrap; gap: 7px 14px; padding: 5px 0 2px; }
+.skyline-legend span { display: inline-flex; align-items: center; gap: 6px; color: #9db1bd; font-size: 10px; }
+.skyline-legend i { display: inline-block; width: 13px; height: 3px; border-radius: 2px; }
+.sky-legend-terrain { background: #9cb9c8; }
+.sky-legend-sun { background: #f6bd60; }
+.sky-legend-earth { background: #73c8e0; }
+.sky-legend-dte, .sky-legend-earth-path { background: #73c8e0; }
+.sky-legend-sun-path { background: #f6bd60; }
+.sky-legend-envelope { background: rgba(185,202,213,.65); }
