@@ -1,28 +1,95 @@
 {
-  "kernels": {
-    "de440s.bsp": {
-      "url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440s.bsp",
-      "sha256": "c1c7feeab882263fc493a9d5a5b2ddd71b54826cdf65d8d17a76126b260a49f2"
+  "schemaVersion": "1.0.0",
+  "entries": [
+    {
+      "path": "data/horizons-ref/apollo11_td.json",
+      "category": "HORIZONS_BASELINE",
+      "sha256": "cd1d53a2ab44fffc4da2eb05cbce873f1d1fa14e04b92eb6f8cff20154cfb20d",
+      "sizeBytes": 8592
     },
-    "moon_pa_de440_200625.bpc": {
-      "url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/moon_pa_de440_200625.bpc",
-      "sha256": "60cd55aa401ea2ea97360636f567554bfe4e37bb829f901b4460a455dfaf783f"
+    {
+      "path": "data/horizons-ref/change4_farside.json",
+      "category": "HORIZONS_BASELINE",
+      "sha256": "6428f745c0bea4377f52618d9e0ec527839833ef65c7a3039e16800efdc90ebc",
+      "sizeBytes": 82863
     },
-    "moon_de440_250416.tf": {
-      "url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/fk/satellites/moon_de440_250416.tf",
-      "sha256": "a47c71e9c9f33796bdafb2c9d69a7ee447b6016ecad80f71cd6f3e479f9cf768"
+    {
+      "path": "data/horizons-ref/change6_farside.json",
+      "category": "HORIZONS_BASELINE",
+      "sha256": "076ab7e68e15003c6f0b8703008d4f6c0bd1a5c5343e078a93e3773f559273fc",
+      "sizeBytes": 82863
     },
-    "moon_assoc_me.tf": {
-      "url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/fk/satellites/moon_assoc_me.tf",
-      "sha256": "52c622043ce0447d575e59ee01642f1894921e68c10f934ceff065f362da6c1c"
+    {
+      "path": "data/horizons-ref/eclipse_2025_03_14.json",
+      "category": "HORIZONS_BASELINE",
+      "sha256": "7f9e9af00e6665c92332bfc2c74f647da8a4c8165bbf8ab28db521f4e2781c1d",
+      "sizeBytes": 45677
     },
-    "pck00011.tpc": {
-      "url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc",
-      "sha256": "3dff7b1dbeceaa01f25467767d3fa25816051c85d162d1edf04acb310ee28bb1"
+    {
+      "path": "data/horizons-ref/im1_libration.json",
+      "category": "HORIZONS_BASELINE",
+      "sha256": "a280271dabb9d61f75faf7d1e6b36ab3eb2d74992dbbf66282f383eb885edff6",
+      "sizeBytes": 45123
     },
-    "naif0012.tls": {
-      "url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/lsk/naif0012.tls",
-      "sha256": "678e32bdb5a744117a467cd9601cd6b373f0e9bc9bbde1371d5eee39600a039b"
+    {
+      "path": "data/horizons-ref/shackleton_rim_de441_ref.json",
+      "category": "HORIZONS_BASELINE",
+      "sha256": "ef3a16705bc9318016430352cd2921d7bfdf6e2753e1d99ad81ae6e414e76c6e",
+      "sizeBytes": 7351
+    },
+    {
+      "path": "data/horizons-ref/south_pole_season.json",
+      "category": "HORIZONS_BASELINE",
+      "sha256": "6cf94f80ce4fe73ba504c442d67c726c318abc77326a43f71fcdf26aad95239f",
+      "sizeBytes": 135043
+    },
+    {
+      "path": "data/kernels/de440s.bsp",
+      "category": "SPICE_KERNEL",
+      "sha256": "c1c7feeab882263fc493a9d5a5b2ddd71b54826cdf65d8d17a76126b260a49f2",
+      "sizeBytes": 32726016
+    },
+    {
+      "path": "data/kernels/moon_080317.tf",
+      "category": "SPICE_KERNEL",
+      "sha256": "78732477b96f9863e7b0d65bcee3c22b8707ca5ed0db56d1173319cb2e8c7993",
+      "sizeBytes": 21437
+    },
+    {
+      "path": "data/kernels/moon_assoc_me.tf",
+      "category": "SPICE_KERNEL",
+      "sha256": "52c622043ce0447d575e59ee01642f1894921e68c10f934ceff065f362da6c1c",
+      "sizeBytes": 8468
+    },
+    {
+      "path": "data/kernels/moon_de440_250416.tf",
+      "category": "SPICE_KERNEL",
+      "sha256": "a47c71e9c9f33796bdafb2c9d69a7ee447b6016ecad80f71cd6f3e479f9cf768",
+      "sizeBytes": 19478
+    },
+    {
+      "path": "data/kernels/moon_pa_de421_1900-2050.bpc",
+      "category": "SPICE_KERNEL",
+      "sha256": "656f90616403d75a75f0cd6c8830fc5b44f8cb4facb5ccb8915e752b397520cf",
+      "sizeBytes": 1770496
+    },
+    {
+      "path": "data/kernels/moon_pa_de440_200625.bpc",
+      "category": "SPICE_KERNEL",
+      "sha256": "60cd55aa401ea2ea97360636f567554bfe4e37bb829f901b4460a455dfaf783f",
+      "sizeBytes": 12863488
+    },
+    {
+      "path": "data/kernels/naif0012.tls",
+      "category": "SPICE_KERNEL",
+      "sha256": "678e32bdb5a744117a467cd9601cd6b373f0e9bc9bbde1371d5eee39600a039b",
+      "sizeBytes": 5257
+    },
+    {
+      "path": "data/kernels/pck00011.tpc",
+      "category": "SPICE_KERNEL",
+      "sha256": "3dff7b1dbeceaa01f25467767d3fa25816051c85d162d1edf04acb310ee28bb1",
+      "sizeBytes": 131226
     }
-  }
+  ]
 }
