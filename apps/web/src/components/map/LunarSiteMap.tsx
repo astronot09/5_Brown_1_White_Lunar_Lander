@@ -1,223 +1,408 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import './LunarSiteMap.css';
-import type { LunarSite } from './lunarTypes';
-import { useLunarSites } from './useLunarSites';
+import type { CuratedLunarSite } from '../../data/siteCatalogue';
+import type { SimulationStepState } from '../../engine/physicsEngine';
+
+export type MapPerspective = 'GLOBE' | 'STREET_VIEW' | 'ORBITAL_SYSTEM';
 
 export interface LunarSiteMapProps {
-  selectedSiteId?: string;
-  onSiteSelect?: (site: LunarSite) => void;
-  azimuthDeg?: number;
-  className?: string;
+  sites: CuratedLunarSite[];
+  selectedSite: CuratedLunarSite;
+  currentState: SimulationStepState;
+  perspective: MapPerspective;
+  onSelectSite: (site: CuratedLunarSite) => void;
+  onDropCustomPin: (latDeg: number, lonDeg: number) => void;
+  compact?: boolean;
 }
 
-type LightingFilter = 'SOLAR' | 'SURVEY';
+const LANDMARKS = [
+  { name: 'South Pole (90°S)', lat: -89.8, lon: 0 },
+  { name: 'Tycho Crater', lat: -43.3, lon: 348.8 },
+  { name: 'Mare Tranquillitatis', lat: 1.5, lon: 25.0 },
+  { name: 'Lunar Far Side', lat: -10.0, lon: 180.0 },
+];
 
 function latLonToVector3(latDeg: number, lonDeg: number, radius: number): THREE.Vector3 {
   const phi = ((90 - latDeg) * Math.PI) / 180;
   const theta = ((lonDeg + 180) * Math.PI) / 180;
-  return new THREE.Vector3(
-    -radius * Math.sin(phi) * Math.cos(theta),
-    radius * Math.cos(phi),
-    radius * Math.sin(phi) * Math.sin(theta),
-  );
+  const x = -radius * Math.sin(phi) * Math.cos(theta);
+  const y = radius * Math.cos(phi);
+  const z = radius * Math.sin(phi) * Math.sin(theta);
+  return new THREE.Vector3(x, y, z);
 }
 
-/** Crisp SVG Lander Icon for the active site and Target Reticle for candidates */
-function SiteMarkerIcon({ isSelected }: { isSelected: boolean }) {
-  if (isSelected) {
-    return (
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
-        <circle cx="12" cy="12" r="10.5" stroke="#facc15" strokeWidth="1.5" strokeDasharray="3 2" fill="rgba(15,23,42,0.88)" />
-        <rect x="8.5" y="7" width="7" height="5" rx="1" fill="#facc15" />
-        <path d="M9.5 7L10.5 4.8H13.5L14.5 7H9.5Z" fill="#fde047" />
-        <path d="M8.5 12L6 16.5M15.5 12L18 16.5M12 12V16.5" stroke="#facc15" strokeWidth="1.5" strokeLinecap="round" />
-        <line x1="4.5" y1="16.8" x2="7.5" y2="16.8" stroke="#facc15" strokeWidth="1.6" strokeLinecap="round" />
-        <line x1="16.5" y1="16.8" x2="19.5" y2="16.8" stroke="#facc15" strokeWidth="1.6" strokeLinecap="round" />
-      </svg>
-    );
+function sampleHorizonDeg(mask: number[], azimuthDeg: number): number {
+  if (!mask || mask.length === 0) return 2.0;
+  const n = mask.length;
+  const wrapped = ((azimuthDeg % 360) + 360) % 360;
+  const exactIdx = (wrapped / 360) * n;
+  const i0 = Math.floor(exactIdx) % n;
+  const i1 = (i0 + 1) % n;
+  const frac = exactIdx - Math.floor(exactIdx);
+  return mask[i0]! * (1 - frac) + mask[i1]! * frac;
+}
+
+function createEarthTexture(): THREE.CanvasTexture {
+  const width = 512;
+  const height = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d')!;
+
+  ctx.fillStyle = '#0b4f9f';
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.fillStyle = '#2e7d32';
+  const landmasses = [
+    [125, 75, 42, 32],
+    [145, 115, 22, 18],
+    [168, 155, 28, 45],
+    [275, 68, 35, 22],
+    [282, 122, 34, 48],
+    [355, 78, 65, 38],
+    [405, 165, 26, 20],
+  ];
+  landmasses.forEach(([x, y, rx, ry]) => {
+    ctx.beginPath();
+    ctx.ellipse(x!, y!, rx!, ry!, 0.15, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(0, 0, width, 16);
+  ctx.fillRect(0, height - 16, width, 16);
+
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+  for (let i = 0; i < 38; i++) {
+    const cx = (i * 73) % width;
+    const cy = 28 + ((i * 41) % (height - 56));
+    const cw = 26 + (i % 5) * 14;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, cw, 4.5, -0.1, 0, Math.PI * 2);
+    ctx.fill();
   }
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-      <circle cx="12" cy="12" r="8" stroke="#38bdf8" strokeWidth="1.5" fill="rgba(6,10,20,0.85)" />
-      <circle cx="12" cy="12" r="2.5" fill="#38bdf8" />
-      <path d="M12 2V5M12 19V22M2 12H5M19 12H22" stroke="#38bdf8" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
-}
 
-interface ScreenPin {
-  site: LunarSite;
-  x: number;
-  y: number;
-  labelX: number;
-  labelY: number;
-  visible: boolean;
-  isSelected: boolean;
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
 }
 
 export function LunarSiteMap({
-  selectedSiteId,
-  onSiteSelect,
-  azimuthDeg = 0,
-  className = '',
+  sites,
+  selectedSite,
+  currentState,
+  perspective,
+  onSelectSite,
+  onDropCustomPin,
+  compact = false,
 }: LunarSiteMapProps) {
-  const { sites } = useLunarSites();
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const [lightingFilter, setLightingFilter] = useState<LightingFilter>('SOLAR');
-  const [viewingDarkSide, setViewingDarkSide] = useState<boolean>(false);
-  const [screenPins, setScreenPins] = useState<ScreenPin[]>([]);
-
-  const orbitRef = useRef({
-    yaw: 0.35,
-    pitch: -0.92,
-    distance: 2.75,
-    targetYaw: 0.35,
-    targetPitch: -0.92,
-    targetDistance: 2.75,
-    isDragging: false,
-    lastX: 0,
-    lastY: 0,
+  const mountRef: any = useRef(null);
+  const [skyBadges, setSkyBadges] = useState({
+    sun: { x: 0, y: 0, visible: false },
+    earth: { x: 0, y: 0, visible: false },
+    headingDeg: 0,
   });
 
-  const selectedIdRef = useRef(selectedSiteId);
-  selectedIdRef.current = selectedSiteId;
+  const dragRef = useRef({ isDragging: false, lastX: 0, lastY: 0, moved: false });
+  const cameraCtrlRef = useRef({
+    globeRotX: 1.15,
+    globeRotY: 0.35,
+    targetGlobeRotX: 1.15,
+    targetGlobeRotY: 0.35,
+    globeZoom: 2.35,
+    targetGlobeZoom: 2.35,
+    streetYaw: 0,
+    streetPitch: 0.08,
+  });
 
-  const sunAzRef = useRef(azimuthDeg);
-  sunAzRef.current = azimuthDeg;
+  const stateRef = useRef(currentState);
+  stateRef.current = currentState;
 
-  const filterRef = useRef<LightingFilter>(lightingFilter);
-  filterRef.current = lightingFilter;
-
-  const flyToSite = (site: LunarSite) => {
-    if (onSiteSelect) onSiteSelect(site);
-    const phi = ((90 - site.coordinates.latDeg) * Math.PI) / 180;
-    const theta = ((site.coordinates.lonDeg + 180) * Math.PI) / 180;
-    const targetVec = new THREE.Vector3(
-      -Math.sin(phi) * Math.cos(theta),
-      Math.cos(phi),
-      Math.sin(phi) * Math.sin(theta),
-    ).normalize();
-
-    orbitRef.current.targetPitch = Math.max(-1.42, Math.min(1.42, Math.asin(targetVec.y)));
-    orbitRef.current.targetYaw = Math.atan2(targetVec.x, targetVec.z);
-    orbitRef.current.targetDistance = 2.25;
-  };
+  const siteRef = useRef(selectedSite);
+  siteRef.current = selectedSite;
 
   useEffect(() => {
-    const container = containerRef.current;
+    const latRad = (selectedSite.coordinates.latDeg * Math.PI) / 180;
+    const lonRad = ((selectedSite.coordinates.lonDeg + 90) * Math.PI) / 180;
+    cameraCtrlRef.current.targetGlobeRotX = Math.max(-1.48, Math.min(1.48, -latRad * 0.92));
+    cameraCtrlRef.current.targetGlobeRotY = -lonRad;
+    cameraCtrlRef.current.streetYaw = (currentState.sunAzimuthDeg * Math.PI) / 180;
+  }, [selectedSite.siteId]);
+
+  useEffect(() => {
+    const container = mountRef.current;
     if (!container) return;
 
-    const width = container.clientWidth || 560;
-    const height = 380;
+    const width = container.clientWidth || 800;
+    const height = container.clientHeight || (compact ? 340 : 680);
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(38, width / height, 0.1, 100);
+    const camera = new THREE.PerspectiveCamera(42, width / height, 0.05, 150);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.15;
+    renderer.toneMappingExposure = 1.38;
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
 
-    // Starfield
     const starGeo = new THREE.BufferGeometry();
-    const starPositions = new Float32Array(1400 * 3);
-    for (let i = 0; i < 1400 * 3; i += 3) {
-      const r = 20 + Math.random() * 25;
-      const theta = Math.random() * Math.PI * 2;
-      const phi = Math.acos(2 * Math.random() - 1);
-      starPositions[i] = r * Math.sin(phi) * Math.cos(theta);
-      starPositions[i + 1] = r * Math.cos(phi);
-      starPositions[i + 2] = r * Math.sin(phi) * Math.sin(theta);
+    const starCount = compact ? 600 : 1600;
+    const starPos = new Float32Array(starCount * 3);
+    for (let i = 0; i < starCount * 3; i += 3) {
+      const r = 28 + Math.random() * 25;
+      const u = Math.random() * Math.PI * 2;
+      const v = Math.acos(2 * Math.random() - 1);
+      starPos[i] = r * Math.sin(v) * Math.cos(u);
+      starPos[i + 1] = r * Math.sin(v) * Math.sin(u);
+      starPos[i + 2] = r * Math.cos(v);
     }
-    starGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+    starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
     scene.add(
       new THREE.Points(
         starGeo,
-        new THREE.PointsMaterial({ color: 0xf8fafc, size: 0.075, transparent: true, opacity: 0.85 }),
+        new THREE.PointsMaterial({ color: 0xf8fafc, size: 0.08, transparent: true, opacity: 0.78 }),
       ),
     );
 
-    // High-resolution smooth sphere using real NASA LRO Lunar Mosaic
-    const loader = new THREE.TextureLoader();
-    const colorMap = loader.load('/textures/lroc_color_poles_1k.jpg');
-    colorMap.colorSpace = THREE.SRGBColorSpace;
-    colorMap.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    const texLoader = new THREE.TextureLoader();
+    const moonTex = texLoader.load('/textures/lroc_color_poles_1k.jpg');
+    moonTex.colorSpace = THREE.SRGBColorSpace;
 
-    const bumpMap = loader.load('/textures/lroc_color_poles_1k.jpg');
-    bumpMap.anisotropy = renderer.capabilities.getMaxAnisotropy();
-
-    const moonGeo = new THREE.SphereGeometry(1, 160, 160);
-    const moonMat = new THREE.MeshStandardMaterial({
-      map: colorMap,
-      bumpMap: bumpMap,
-      bumpScale: 0.024,
-      displacementMap: bumpMap,
-      displacementScale: 0.01,
-      roughness: 0.94,
-      metalness: 0.02,
-    });
-    const moonMesh = new THREE.Mesh(moonGeo, moonMat);
-    scene.add(moonMesh);
-
-    // Subtle -85° South Pole Latitude Circle
-    const ringRadius = Math.cos((85 * Math.PI) / 180);
-    const poleRingGeo = new THREE.RingGeometry(ringRadius - 0.0012, ringRadius + 0.0012, 128);
-    poleRingGeo.rotateX(Math.PI / 2);
-    const poleRing = new THREE.Mesh(
-      poleRingGeo,
-      new THREE.MeshBasicMaterial({ color: 0x38bdf8, side: THREE.DoubleSide, transparent: true, opacity: 0.3 }),
+    const globeGroup = new THREE.Group();
+    const moonMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 80, 80),
+      new THREE.MeshStandardMaterial({
+        map: moonTex,
+        bumpMap: moonTex,
+        bumpScale: 0.018,
+        roughness: 0.86,
+        metalness: 0.02,
+      }),
     );
-    poleRing.position.y = -Math.sin((85 * Math.PI) / 180);
-    scene.add(poleRing);
+    globeGroup.add(moonMesh);
 
-    // Sunlight + Survey Fill Light
-    const sunLight = new THREE.DirectionalLight(0xfffdf5, 2.8);
-    scene.add(sunLight);
+    const halo = new THREE.Mesh(
+      new THREE.SphereGeometry(1.028, 48, 48),
+      new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.11, side: THREE.BackSide }),
+    );
+    globeGroup.add(halo);
 
-    const ambientLight = new THREE.AmbientLight(0x1e3a5f, 0.32);
-    scene.add(ambientLight);
+    const gridMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.22 });
+    [-60, -30, 0, 30, 60].forEach((lat) => {
+      const pts: THREE.Vector3[] = [];
+      for (let lon = 0; lon <= 360; lon += 5) pts.push(latLonToVector3(lat, lon, 1.002));
+      globeGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), gridMat));
+    });
 
-    const surveyFillLight = new THREE.DirectionalLight(0xe2e8f0, 0);
-    scene.add(surveyFillLight);
+    const pinMeshes: { mesh: THREE.Mesh; site: CuratedLunarSite }[] = [];
+    let beaconRing: THREE.Mesh | null = null;
 
-    const anchors = sites.map((site) => ({
-      site,
-      pos: latLonToVector3(site.coordinates.latDeg, site.coordinates.lonDeg, 1.01),
-    }));
+    sites.forEach((s) => {
+      const isSel = s.siteId === selectedSite.siteId;
+      const color = isSel
+        ? 0xfacc15
+        : s.program === 'APOLLO'
+          ? 0x38bdf8
+          : s.program === 'CLPS'
+            ? 0xf97316
+            : s.program === 'CSA'
+              ? 0xf43f5e
+              : s.program === 'INTERNATIONAL'
+                ? 0xc084fc
+                : 0x34d399;
+
+      const pin = new THREE.Mesh(
+        new THREE.SphereGeometry(isSel ? 0.026 : 0.016, 16, 16),
+        new THREE.MeshBasicMaterial({ color }),
+      );
+      const pos = latLonToVector3(s.coordinates.latDeg, s.coordinates.lonDeg, 1.012);
+      pin.position.copy(pos);
+      globeGroup.add(pin);
+      pinMeshes.push({ mesh: pin, site: s });
+
+      if (isSel) {
+        beaconRing = new THREE.Mesh(
+          new THREE.RingGeometry(0.036, 0.052, 32),
+          new THREE.MeshBasicMaterial({ color: 0xfacc15, side: THREE.DoubleSide }),
+        );
+        beaconRing.position.copy(latLonToVector3(s.coordinates.latDeg, s.coordinates.lonDeg, 1.014));
+        beaconRing.lookAt(pos.clone().multiplyScalar(2));
+        globeGroup.add(beaconRing);
+      }
+    });
+
+    const streetGroup = new THREE.Group();
+    const regolithRepeat = moonTex.clone();
+    regolithRepeat.wrapS = THREE.RepeatWrapping;
+    regolithRepeat.wrapT = THREE.RepeatWrapping;
+    regolithRepeat.repeat.set(8, 8);
+    regolithRepeat.needsUpdate = true;
+
+    const maxR = 6.0;
+    const terrainGeo = new THREE.RingGeometry(0.01, maxR, 180, 64);
+    terrainGeo.rotateX(-Math.PI / 2);
+    const posAttr = terrainGeo.attributes.position as THREE.BufferAttribute;
+    const mask = selectedSite.horizonMaskDeg;
+
+    for (let i = 0; i < posAttr.count; i++) {
+      const x = posAttr.getX(i);
+      const z = posAttr.getZ(i);
+      const r = Math.hypot(x, z);
+      const azRad = Math.atan2(x, -z);
+      const azDeg = ((azRad * 180) / Math.PI + 360) % 360;
+      const maskDeg = sampleHorizonDeg(mask, azDeg);
+
+      const t = Math.max(0, Math.min(1, (r - 0.35) / (maxR - 0.35)));
+      const smooth = t * t * (3 - 2 * t);
+      const ridgeY = Math.tan((Math.max(0, maskDeg) * Math.PI) / 180) * r * 2.4 * smooth;
+      const microBump = Math.sin(x * 7) * Math.cos(z * 7) * 0.012 * (1 - smooth);
+      posAttr.setY(i, ridgeY + microBump);
+    }
+    terrainGeo.computeVertexNormals();
+
+    const surfaceTerrain = new THREE.Mesh(
+      terrainGeo,
+      new THREE.MeshStandardMaterial({
+        map: regolithRepeat,
+        bumpMap: regolithRepeat,
+        bumpScale: 0.02,
+        roughness: 0.95,
+        side: THREE.DoubleSide,
+      }),
+    );
+    surfaceTerrain.receiveShadow = true;
+    streetGroup.add(surfaceTerrain);
+
+    const skySun = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22, 24, 24),
+      new THREE.MeshBasicMaterial({ color: 0xfef08a }),
+    );
+    streetGroup.add(skySun);
+
+    const earthTex = createEarthTexture();
+    const skyEarth = new THREE.Mesh(
+      new THREE.SphereGeometry(0.32, 32, 32),
+      new THREE.MeshBasicMaterial({ map: earthTex }),
+    );
+    streetGroup.add(skyEarth);
+
+    const orbitSystemGroup = new THREE.Group();
+    const centralEarth = new THREE.Mesh(
+      new THREE.SphereGeometry(0.55, 40, 40),
+      new THREE.MeshStandardMaterial({ map: earthTex, roughness: 0.6 }),
+    );
+    orbitSystemGroup.add(centralEarth);
+
+    const orbitRingPts: THREE.Vector3[] = [];
+    const orbitRadius = 2.4;
+    for (let deg = 0; deg <= 360; deg += 3) {
+      const rad = (deg * Math.PI) / 180;
+      orbitRingPts.push(new THREE.Vector3(Math.cos(rad) * orbitRadius, 0, Math.sin(rad) * orbitRadius));
+    }
+    orbitSystemGroup.add(
+      new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(orbitRingPts),
+        new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.45 }),
+      ),
+    );
+
+    const orbitingMoon = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22, 36, 36),
+      new THREE.MeshStandardMaterial({ map: moonTex, roughness: 0.85 }),
+    );
+    orbitSystemGroup.add(orbitingMoon);
+
+    const siteMarkerOnOrbitMoon = new THREE.Mesh(
+      new THREE.SphereGeometry(0.032, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0xfacc15 }),
+    );
+    orbitingMoon.add(siteMarkerOnOrbitMoon);
+
+    if (perspective === 'GLOBE') scene.add(globeGroup);
+    else if (perspective === 'STREET_VIEW') scene.add(streetGroup);
+    else scene.add(orbitSystemGroup);
+
+    const sunDirLight = new THREE.DirectionalLight(0xffffff, perspective === 'GLOBE' ? 1.8 : 2.8);
+    sunDirLight.position.set(4, 3, 5);
+    scene.add(sunDirLight);
+
+    const fillHemi = new THREE.HemisphereLight(
+      0xffffff,
+      0x475569,
+      perspective === 'GLOBE' ? 1.55 : perspective === 'ORBITAL_SYSTEM' ? 1.2 : 0.75,
+    );
+    scene.add(fillHemi);
+
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
 
     const onPointerDown = (e: PointerEvent) => {
-      orbitRef.current.isDragging = true;
-      orbitRef.current.lastX = e.clientX;
-      orbitRef.current.lastY = e.clientY;
+      dragRef.current = { isDragging: true, lastX: e.clientX, lastY: e.clientY, moved: false };
     };
 
     const onPointerMove = (e: PointerEvent) => {
-      if (!orbitRef.current.isDragging) return;
-      const dx = e.clientX - orbitRef.current.lastX;
-      const dy = e.clientY - orbitRef.current.lastY;
-      orbitRef.current.targetYaw -= dx * 0.0065;
-      orbitRef.current.targetPitch = Math.max(-1.48, Math.min(1.48, orbitRef.current.targetPitch + dy * 0.0065));
-      orbitRef.current.yaw = orbitRef.current.targetYaw;
-      orbitRef.current.pitch = orbitRef.current.targetPitch;
-      orbitRef.current.lastX = e.clientX;
-      orbitRef.current.lastY = e.clientY;
+      if (!dragRef.current.isDragging) return;
+      const dx = e.clientX - dragRef.current.lastX;
+      const dy = e.clientY - dragRef.current.lastY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragRef.current.moved = true;
+
+      const ctrl = cameraCtrlRef.current;
+      if (perspective === 'STREET_VIEW') {
+        ctrl.streetYaw -= dx * 0.005;
+        ctrl.streetPitch = Math.max(-0.18, Math.min(0.85, ctrl.streetPitch + dy * 0.004));
+      } else {
+        ctrl.targetGlobeRotY += dx * 0.007;
+        ctrl.targetGlobeRotX = Math.max(-1.55, Math.min(1.55, ctrl.targetGlobeRotX + dy * 0.008));
+      }
+
+      dragRef.current.lastX = e.clientX;
+      dragRef.current.lastY = e.clientY;
     };
 
-    const onPointerUp = () => {
-      orbitRef.current.isDragging = false;
+    const onPointerUp = (e: PointerEvent) => {
+      const wasClick = dragRef.current.isDragging && !dragRef.current.moved;
+      dragRef.current.isDragging = false;
+      if (!wasClick || perspective !== 'GLOBE') return;
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+
+      const hitPins = raycaster.intersectObjects(pinMeshes.map((p) => p.mesh));
+      if (hitPins.length > 0) {
+        const found = pinMeshes.find((p) => p.mesh === hitPins[0]!.object);
+        if (found) {
+          onSelectSite(found.site);
+          return;
+        }
+      }
+
+      const hitMoon = raycaster.intersectObject(moonMesh);
+      if (hitMoon.length > 0) {
+        const localPt = globeGroup.worldToLocal(hitMoon[0]!.point.clone()).normalize();
+        const latDeg = (Math.asin(Math.max(-1, Math.min(1, localPt.y))) * 180) / Math.PI;
+        const lonDeg = (((Math.atan2(localPt.z, -localPt.x) * 180) / Math.PI - 180) % 360 + 360) % 360;
+        onDropCustomPin(Number(latDeg.toFixed(2)), Number(lonDeg.toFixed(2)));
+      }
     };
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      orbitRef.current.targetDistance = Math.max(1.55, Math.min(4.2, orbitRef.current.targetDistance + e.deltaY * 0.0014));
+      if (perspective !== 'STREET_VIEW') {
+        cameraCtrlRef.current.targetGlobeZoom = Math.max(
+          1.38,
+          Math.min(4.2, cameraCtrlRef.current.targetGlobeZoom + e.deltaY * 0.0018),
+        );
+      }
     };
 
     const dom = renderer.domElement;
-    dom.style.cursor = 'grab';
+    dom.style.cursor = perspective === 'STREET_VIEW' ? 'move' : 'grab';
     dom.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
@@ -225,105 +410,105 @@ export function LunarSiteMap({
 
     const onResize = () => {
       if (!container) return;
-      const w = container.clientWidth || 560;
-      camera.aspect = w / height;
+      const w = container.clientWidth || 800;
+      const h = container.clientHeight || (compact ? 340 : 680);
+      camera.aspect = w / h;
       camera.updateProjectionMatrix();
-      renderer.setSize(w, height);
+      renderer.setSize(w, h);
     };
     window.addEventListener('resize', onResize);
 
     let frameId = 0;
-    let lastUiSync = 0;
+    let lastSync = 0;
     const clock = new THREE.Clock();
 
     const animate = () => {
       frameId = requestAnimationFrame(animate);
       const t = clock.getElapsedTime();
+      const ctrl = cameraCtrlRef.current;
+      const st = stateRef.current;
 
-      const o = orbitRef.current;
-      o.yaw += (o.targetYaw - o.yaw) * 0.12;
-      o.pitch += (o.targetPitch - o.pitch) * 0.12;
-      o.distance += (o.targetDistance - o.distance) * 0.14;
+      ctrl.globeRotX += (ctrl.targetGlobeRotX - ctrl.globeRotX) * 0.14;
+      ctrl.globeRotY += (ctrl.targetGlobeRotY - ctrl.globeRotY) * 0.14;
+      ctrl.globeZoom += (ctrl.targetGlobeZoom - ctrl.globeZoom) * 0.14;
 
-      camera.position.set(
-        o.distance * Math.cos(o.pitch) * Math.sin(o.yaw),
-        o.distance * Math.sin(o.pitch),
-        o.distance * Math.cos(o.pitch) * Math.cos(o.yaw),
-      );
-      camera.lookAt(0, 0, 0);
+      if (perspective === 'GLOBE') {
+        globeGroup.rotation.x = ctrl.globeRotX;
+        globeGroup.rotation.y = ctrl.globeRotY;
+        camera.position.set(0, 0, ctrl.globeZoom);
+        camera.lookAt(0, 0, 0);
 
-      const sunRad = (sunAzRef.current * Math.PI) / 180;
-      const sunDir = new THREE.Vector3(Math.sin(sunRad), -0.18, Math.cos(sunRad)).normalize();
-      sunLight.position.copy(sunDir).multiplyScalar(6);
+        const sunAzRad = (st.sunAzimuthDeg * Math.PI) / 180;
+        sunDirLight.position.set(Math.sin(sunAzRad) * 6, 0.4, Math.cos(sunAzRad) * 6);
 
-      if (filterRef.current === 'SURVEY') {
-        sunLight.intensity = 1.65;
-        ambientLight.intensity = 1.45;
-        surveyFillLight.position.copy(camera.position).normalize().multiplyScalar(5);
-        surveyFillLight.intensity = 1.1;
+        if (beaconRing) {
+          const pulse = 1 + 0.18 * Math.sin(t * 4);
+          beaconRing.scale.set(pulse, pulse, 1);
+        }
+      } else if (perspective === 'STREET_VIEW') {
+        camera.position.set(0, 0.22, 0);
+        const lookDist = 5;
+        const lookX = Math.sin(ctrl.streetYaw) * Math.cos(ctrl.streetPitch) * lookDist;
+        const lookY = 0.22 + Math.sin(ctrl.streetPitch) * lookDist;
+        const lookZ = -Math.cos(ctrl.streetYaw) * Math.cos(ctrl.streetPitch) * lookDist;
+        camera.lookAt(lookX, lookY, lookZ);
+
+        const skyR = 7.2;
+        const sAz = (st.sunAzimuthDeg * Math.PI) / 180;
+        const sEl = Math.atan(Math.tan((st.sunElevationDeg * Math.PI) / 180) * 2.4);
+        const sunPos = new THREE.Vector3(
+          Math.sin(sAz) * Math.cos(sEl) * skyR,
+          0.22 + Math.sin(sEl) * skyR,
+          -Math.cos(sAz) * Math.cos(sEl) * skyR,
+        );
+        skySun.position.copy(sunPos);
+        sunDirLight.position.copy(sunPos);
+        sunDirLight.intensity = st.sunVisible ? 2.8 : 0.25;
+
+        const eAz = (st.earthAzimuthDeg * Math.PI) / 180;
+        const eEl = Math.atan(Math.tan((st.earthElevationDeg * Math.PI) / 180) * 2.4);
+        const earthPos = new THREE.Vector3(
+          Math.sin(eAz) * Math.cos(eEl) * skyR,
+          0.22 + Math.sin(eEl) * skyR,
+          -Math.cos(eAz) * Math.cos(eEl) * skyR,
+        );
+        skyEarth.position.copy(earthPos);
+        skyEarth.rotation.y = t * 0.2;
+
+        if (t - lastSync > 0.06) {
+          lastSync = t;
+          const w = renderer.domElement.clientWidth || width;
+          const h = renderer.domElement.clientHeight || height;
+          const sv = sunPos.clone().project(camera);
+          const ev = earthPos.clone().project(camera);
+          const headingDeg = (((ctrl.streetYaw * 180) / Math.PI) % 360 + 360) % 360;
+          setSkyBadges({
+            sun: { x: (sv.x * 0.5 + 0.5) * w, y: (-sv.y * 0.5 + 0.5) * h - 22, visible: sv.z < 1 },
+            earth: { x: (ev.x * 0.5 + 0.5) * w, y: (-ev.y * 0.5 + 0.5) * h - 26, visible: ev.z < 1 },
+            headingDeg,
+          });
+        }
       } else {
-        sunLight.intensity = 2.9;
-        ambientLight.intensity = 0.28;
-        surveyFillLight.intensity = 0;
+        const phaseRad = ((st.sunAzimuthDeg + siteRef.current.coordinates.lonDeg) * Math.PI) / 180;
+        orbitingMoon.position.set(Math.cos(phaseRad) * orbitRadius, 0.12 * Math.sin(phaseRad), Math.sin(phaseRad) * orbitRadius);
+        orbitingMoon.lookAt(0, 0, 0);
+        siteMarkerOnOrbitMoon.position.copy(
+          latLonToVector3(siteRef.current.coordinates.latDeg, siteRef.current.coordinates.lonDeg, 0.226),
+        );
+
+        centralEarth.rotation.y = t * 0.25;
+        sunDirLight.position.set(8, 1.5, 0);
+
+        const camDist = ctrl.globeZoom * 2.1;
+        camera.position.set(
+          camDist * Math.sin(ctrl.globeRotY) * Math.cos(ctrl.globeRotX * 0.5),
+          camDist * Math.max(0.25, Math.sin(ctrl.globeRotX * 0.7)),
+          camDist * Math.cos(ctrl.globeRotY) * Math.cos(ctrl.globeRotX * 0.5),
+        );
+        camera.lookAt(0, 0, 0);
       }
 
       renderer.render(scene, camera);
-
-      if (t - lastUiSync > 0.04) {
-        lastUiSync = t;
-        const w = renderer.domElement.clientWidth || width;
-        const h = renderer.domElement.clientHeight || height;
-        const camDir = camera.position.clone().normalize();
-
-        setViewingDarkSide(camDir.dot(sunDir) < -0.15);
-
-        const rawPins = anchors.map(({ site, pos }, idx) => {
-          const normal = pos.clone().normalize();
-          const front = normal.dot(camDir) > 0.08;
-          const v = pos.clone().project(camera);
-          const x = (v.x * 0.5 + 0.5) * w;
-          const y = (-v.y * 0.5 + 0.5) * h;
-          const angle = ((idx / Math.max(1, anchors.length)) * Math.PI * 2) - Math.PI / 4;
-          return {
-            site,
-            x,
-            y,
-            labelX: x + Math.cos(angle) * 78,
-            labelY: y + Math.sin(angle) * 48,
-            visible: front && v.z < 1,
-            isSelected: site.siteId === selectedIdRef.current,
-          };
-        });
-
-        const boxW = 136;
-        const boxH = 26;
-        for (let iter = 0; iter < 6; iter++) {
-          for (let i = 0; i < rawPins.length; i++) {
-            const a = rawPins[i]!;
-            if (!a.visible) continue;
-            for (let j = i + 1; j < rawPins.length; j++) {
-              const b = rawPins[j]!;
-              if (!b.visible) continue;
-              const dx = b.labelX - a.labelX;
-              const dy = b.labelY - a.labelY;
-              const overlapX = boxW - Math.abs(dx);
-              const overlapY = boxH - Math.abs(dy);
-              if (overlapX > 0 && overlapY > 0) {
-                const pushY = (overlapY * 0.55) * (dy >= 0 ? 1 : -1);
-                const pushX = (overlapX * 0.25) * (dx >= 0 ? 1 : -1);
-                a.labelY -= pushY;
-                b.labelY += pushY;
-                a.labelX -= pushX;
-                b.labelX += pushX;
-              }
-            }
-            a.labelX = Math.max(76, Math.min(w - 76, a.labelX));
-            a.labelY = Math.max(54, Math.min(h - 32, a.labelY));
-          }
-        }
-
-        setScreenPins(rawPins);
-      }
     };
     animate();
 
@@ -336,251 +521,118 @@ export function LunarSiteMap({
       window.removeEventListener('resize', onResize);
       renderer.dispose();
     };
-  }, [sites]);
+  }, [perspective, sites, selectedSite.siteId, compact]);
 
   return (
-    <div className={className} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {/* 3D Interactive Moon Viewport */}
-      <div style={{ position: 'relative', borderRadius: 12, overflow: 'hidden', border: '1px solid #1e293b', background: '#03050a' }}>
-        <div ref={containerRef} style={{ width: '100%', height: 380 }} />
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <div ref={mountRef} style={{ width: '100%', height: '100%' }} />
 
-        {/* Top Control Bar */}
-        <div
+      {/* ASU Quickmap Link Overlay */}
+      <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 15, display: 'flex', gap: 6 }}>
+        <a
+          href={`https://quickmap.lroc.asu.edu/?lat=${selectedSite.coordinates.latDeg}&lon=${selectedSite.coordinates.lonDeg}&zoom=9`}
+          target="_blank"
+          rel="noreferrer"
           style={{
-            position: 'absolute',
-            top: 10,
-            left: 10,
-            right: 10,
-            display: 'flex',
-            flexWrap: 'wrap',
-            justifyContent: 'space-between',
-            gap: 6,
-            pointerEvents: 'none',
+            background: 'rgba(15, 23, 42, 0.9)',
+            color: '#38bdf8',
+            border: '1px solid #334155',
+            borderRadius: 6,
+            padding: '5px 10px',
+            fontSize: 10,
+            fontWeight: 800,
+            textDecoration: 'none',
           }}
         >
-          <div style={{ display: 'flex', gap: 6, pointerEvents: 'auto' }}>
-            <button
-              type="button"
-              onClick={() => {
-                orbitRef.current.targetPitch = -1.25;
-                orbitRef.current.targetDistance = 2.2;
-              }}
-              style={{
-                background: 'rgba(15, 23, 42, 0.88)',
-                color: '#38bdf8',
-                border: '1px solid #334155',
-                borderRadius: 6,
-                padding: '5px 9px',
-                fontSize: 11,
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              South Pole Orbit
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                orbitRef.current.targetPitch = 0.05;
-                orbitRef.current.targetYaw = 0;
-                orbitRef.current.targetDistance = 3.05;
-              }}
-              style={{
-                background: 'rgba(15, 23, 42, 0.88)',
-                color: '#e2e8f0',
-                border: '1px solid #334155',
-                borderRadius: 6,
-                padding: '5px 9px',
-                fontSize: 11,
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              Full Globe
-            </button>
-          </div>
+          🔍 Quickmap ↗
+        </a>
+      </div>
 
-          <div style={{ display: 'flex', gap: 6, pointerEvents: 'auto' }}>
-            <button
-              type="button"
-              onClick={() => setLightingFilter('SOLAR')}
-              style={{
-                background: lightingFilter === 'SOLAR' ? '#0284c7' : 'rgba(15, 23, 42, 0.88)',
-                color: '#fff',
-                border: '1px solid #334155',
-                borderRadius: 6,
-                padding: '5px 9px',
-                fontSize: 11,
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              1. True Solar
-            </button>
-            <button
-              type="button"
-              onClick={() => setLightingFilter('SURVEY')}
-              style={{
-                background: lightingFilter === 'SURVEY' ? '#059669' : 'rgba(15, 23, 42, 0.88)',
-                color: '#fff',
-                border: '1px solid #334155',
-                borderRadius: 6,
-                padding: '5px 9px',
-                fontSize: 11,
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              2. Dark-Side Survey
-            </button>
-          </div>
-        </div>
-
-        {/* Dynamic Dark Side / Lunar Night Hemisphere Indicator Badge */}
-        {viewingDarkSide && (
+      {perspective === 'STREET_VIEW' && (
+        <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden' }}>
           <div
             style={{
               position: 'absolute',
-              top: 44,
-              right: 10,
-              background: lightingFilter === 'SURVEY' ? 'rgba(6, 95, 70, 0.92)' : 'rgba(30, 41, 59, 0.92)',
-              border: lightingFilter === 'SURVEY' ? '1px solid #34d399' : '1px solid #64748b',
-              color: lightingFilter === 'SURVEY' ? '#6ee7b7' : '#cbd5e1',
-              borderRadius: 6,
-              padding: '4px 9px',
-              fontSize: 10,
-              fontWeight: 600,
+              top: compact ? 44 : 84,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              background: 'rgba(15, 23, 42, 0.85)',
+              border: '1px solid #334155',
+              borderRadius: 20,
+              padding: '4px 14px',
+              fontSize: 11,
+              fontWeight: 800,
+              color: '#38bdf8',
             }}
           >
-            {lightingFilter === 'SURVEY'
-              ? '🌑 DARK SIDE / LUNAR NIGHT — SURVEY FILTER ACTIVE'
-              : '🌑 DARK SIDE / LUNAR NIGHT (Click "2. Dark-Side Survey" to illuminate)'}
+            🧭 SURFACE COMPASS: {Math.round(skyBadges.headingDeg)}° · Drag to look 360° around horizon
           </div>
-        )}
 
-        {/* SVG Leader Lines + Collision-Separated Lander Icons */}
-        <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
-          {screenPins.map((item) => {
-            if (!item.visible) return null;
-            return (
-              <line
-                key={item.site.siteId}
-                x1={item.x}
-                y1={item.y}
-                x2={item.labelX}
-                y2={item.labelY}
-                stroke={item.isSelected ? '#facc15' : 'rgba(56, 189, 248, 0.7)'}
-                strokeWidth={item.isSelected ? 1.6 : 1}
-              />
-            );
-          })}
-        </svg>
+          {skyBadges.sun.visible && (
+            <div
+              style={{
+                position: 'absolute',
+                left: skyBadges.sun.x,
+                top: skyBadges.sun.y,
+                transform: 'translate(-50%, -50%)',
+                background: 'rgba(15, 23, 42, 0.9)',
+                border: `1px solid ${currentState.sunVisible ? '#facc15' : '#ef4444'}`,
+                color: currentState.sunVisible ? '#fde047' : '#fca5a5',
+                padding: '2px 8px',
+                borderRadius: 5,
+                fontSize: 11,
+                fontWeight: 800,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              ☀ SUN ({currentState.sunElevationDeg.toFixed(1)}°) {currentState.sunVisible ? '' : '[BEHIND RIDGE]'}
+            </div>
+          )}
 
-        <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-          {screenPins.map((item) => {
-            if (!item.visible) return null;
-            return (
-              <div key={item.site.siteId}>
-                <button
-                  type="button"
-                  onClick={() => flyToSite(item.site)}
-                  title={item.site.name}
-                  style={{
-                    position: 'absolute',
-                    left: item.x,
-                    top: item.y,
-                    transform: 'translate(-50%, -50%)',
-                    background: 'transparent',
-                    border: 'none',
-                    padding: 0,
-                    cursor: 'pointer',
-                    pointerEvents: 'auto',
-                  }}
-                >
-                  <SiteMarkerIcon isSelected={item.isSelected} />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => flyToSite(item.site)}
-                  style={{
-                    position: 'absolute',
-                    left: item.labelX,
-                    top: item.labelY,
-                    transform: 'translate(-50%, -50%)',
-                    background: item.isSelected ? 'rgba(15, 23, 42, 0.95)' : 'rgba(6, 10, 20, 0.88)',
-                    border: item.isSelected ? '1px solid #facc15' : '1px solid rgba(56, 189, 248, 0.45)',
-                    color: item.isSelected ? '#facc15' : '#e2e8f0',
-                    padding: '2px 7px',
-                    borderRadius: 4,
-                    fontSize: 10,
-                    fontWeight: item.isSelected ? 700 : 500,
-                    whiteSpace: 'nowrap',
-                    cursor: 'pointer',
-                    pointerEvents: 'auto',
-                  }}
-                >
-                  {item.site.name.replace(' Crater', '').replace(' Ridge', '')}
-                </button>
-              </div>
-            );
-          })}
+          {skyBadges.earth.visible && (
+            <div
+              style={{
+                position: 'absolute',
+                left: skyBadges.earth.x,
+                top: skyBadges.earth.y,
+                transform: 'translate(-50%, -50%)',
+                background: 'rgba(15, 23, 42, 0.9)',
+                border: `1px solid ${currentState.earthVisible ? '#38bdf8' : '#f43f5e'}`,
+                color: currentState.earthVisible ? '#7dd3fc' : '#fda4af',
+                padding: '2px 8px',
+                borderRadius: 5,
+                fontSize: 11,
+                fontWeight: 800,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              🌍 EARTH ({currentState.earthElevationDeg.toFixed(1)}°)
+            </div>
+          )}
         </div>
+      )}
 
-        {/* Bottom Hint */}
+      {perspective === 'ORBITAL_SYSTEM' && (
         <div
           style={{
             position: 'absolute',
-            bottom: 8,
-            left: 12,
-            right: 12,
-            display: 'flex',
-            justifyContent: 'space-between',
-            fontSize: 10,
-            color: '#94a3b8',
+            top: compact ? 44 : 84,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: 'rgba(15, 23, 42, 0.85)',
+            border: '1px solid #334155',
+            borderRadius: 20,
+            padding: '4px 14px',
+            fontSize: 11,
+            fontWeight: 700,
+            color: '#e2e8f0',
             pointerEvents: 'none',
+            whiteSpace: 'nowrap',
           }}
         >
-          <span>Drag to spin Moon · Scroll to zoom · Click lander icon or card below</span>
-          <span>NASA LRO / LOLA Global Mosaic</span>
+          🪐 Earth–Moon Orbital Frame (29.53d Synodic Revolution) · Yellow dot = {selectedSite.name}
         </div>
-      </div>
-
-      {/* Clickable Candidate Site Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
-        {sites.map((site) => {
-          const isSelected = site.siteId === selectedSiteId;
-          return (
-            <button
-              key={site.siteId}
-              type="button"
-              onClick={() => flyToSite(site)}
-              style={{
-                textAlign: 'left',
-                background: isSelected ? 'rgba(250, 204, 21, 0.12)' : '#090f1d',
-                border: isSelected ? '1px solid #facc15' : '1px solid #1e293b',
-                borderRadius: 8,
-                padding: '8px 10px',
-                cursor: 'pointer',
-                color: '#e2e8f0',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: isSelected ? '#facc15' : '#38bdf8' }}>
-                  {site.name.replace(' Crater', '').replace(' Ridge', '')}
-                </span>
-                {isSelected && <span style={{ fontSize: 10 }}>🛸</span>}
-              </div>
-              <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 3 }}>
-                {site.coordinates.latDeg.toFixed(2)}°, {site.coordinates.lonDeg.toFixed(2)}°
-              </div>
-              <div style={{ fontSize: 10, color: '#cbd5e1', marginTop: 1 }}>
-                Elev: {(site.coordinates.elevationM ?? 0).toFixed(0)} m
-              </div>
-            </button>
-          );
-        })}
-      </div>
+      )}
     </div>
   );
 }
