@@ -11,6 +11,7 @@ import {
   VisibilityTimelineChart,
   type SkyTrackPoint,
 } from './components/charts';
+import LunarSurvivalGame from './components/games/LunarSurvivalGame';
 import { LunarSiteMap, useLunarSites, type LunarSite, type VisibilityState } from './components/map';
 
 /**
@@ -707,6 +708,23 @@ export function App() {
   const [selectedTimeIndex, setSelectedTimeIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
 
+  const [activePage, setActivePage] = useState(() =>
+    window.location.hash === '#/game' ? 'game' : 'navigator'
+  );
+
+  useEffect(() => {
+    const onHashChange = () => {
+      setActivePage(window.location.hash === '#/game' ? 'game' : 'navigator');
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  const navigateTo = (page: 'navigator' | 'game') => {
+    window.location.hash = page === 'game' ? '#/game' : '#/';
+    setActivePage(page);
+  };
+
   const selectedSite: LunarSite | null = useMemo(() => {
     if (sites.length === 0) return null;
     return sites.find((s) => s.siteId === selectedSiteId) ?? sites[0] ?? null;
@@ -797,24 +815,98 @@ export function App() {
     };
   }, [timelineStates]);
 
+  const topNav = (
+    <nav
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: 12,
+        padding: '10px 28px',
+        background: '#050811',
+        borderBottom: '1px solid #1e293b',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+        <a
+          href="#/"
+          onClick={(e) => {
+            e.preventDefault();
+            navigateTo('navigator');
+          }}
+          style={{
+            color: activePage === 'navigator' ? '#38bdf8' : '#94a3b8',
+            textDecoration: activePage === 'navigator' ? 'underline' : 'none',
+            textUnderlineOffset: '6px',
+            fontWeight: 700,
+            fontSize: 13,
+            cursor: 'pointer',
+          }}
+        >
+          🛰️ 3D Landing Site Navigator
+        </a>
+
+        <a
+          href="#/game"
+          onClick={(e) => {
+            e.preventDefault();
+            navigateTo('game');
+          }}
+          style={{
+            color: activePage === 'game' ? '#facc15' : '#38bdf8',
+            textDecoration: 'underline',
+            textUnderlineOffset: '6px',
+            fontWeight: 700,
+            fontSize: 13,
+            cursor: 'pointer',
+          }}
+        >
+          🎮 Play Lunar Survival Simulator →
+        </a>
+      </div>
+
+      <span style={{ fontSize: 11, color: '#64748b' }}>
+        NASA Space Apps Challenge · Artemis South Pole
+      </span>
+    </nav>
+  );
+
+  if (activePage === 'game') {
+    return (
+      <div style={{ minHeight: '100vh', background: '#080f1d', color: '#e2e8f0', fontFamily: 'Inter, system-ui, sans-serif' }}>
+        {topNav}
+        <LunarSurvivalGame />
+      </div>
+    );
+  }
+
   if (loading) {
     return (
-      <div style={{ minHeight: '100vh', background: '#060a14', color: '#e2e8f0', display: 'grid', placeItems: 'center', fontFamily: 'system-ui, sans-serif' }}>
-        Initializing Lunar South Pole Ephemeris &amp; DEM Telemetry...
+      <div style={{ minHeight: '100vh', background: '#060a14', color: '#e2e8f0', fontFamily: 'system-ui, sans-serif' }}>
+        {topNav}
+        <div style={{ display: 'grid', placeItems: 'center', minHeight: '80vh' }}>
+          Initializing Lunar South Pole Ephemeris &amp; DEM Telemetry...
+        </div>
       </div>
     );
   }
 
   if (error || !selectedSite) {
     return (
-      <div style={{ minHeight: '100vh', background: '#060a14', color: '#f87171', padding: 32, fontFamily: 'system-ui, sans-serif' }}>
-        Failed to load lunar site profiles: {error ?? 'No sites available'}
+      <div style={{ minHeight: '100vh', background: '#060a14', color: '#f87171', fontFamily: 'system-ui, sans-serif' }}>
+        {topNav}
+        <div style={{ padding: 32 }}>
+          Failed to load lunar site profiles: {error ?? 'No sites available'}
+        </div>
       </div>
     );
   }
 
   return (
     <div style={{ minHeight: '100vh', background: '#060a14', color: '#e2e8f0', fontFamily: 'Inter, system-ui, sans-serif' }}>
+      {topNav}
+
       {/* Top NASA Mission Control Header */}
       <header
         style={{
