@@ -1,0 +1,10 @@
+﻿spiceypy
+numpy
+scipy
+rasterio
+numba
+requests
+pytest
+fastapi
+uvicorn
+pydantic

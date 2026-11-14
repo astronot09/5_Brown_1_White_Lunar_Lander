@@ -1,0 +1,9 @@
+﻿data/kernels/
+data/dem/
+*.bsp
+*.bpc
+*.tif
+__pycache__/
+.venv/
+node_modules/
+dist/
