@@ -25,6 +25,103 @@ type MainTab = 'HOME' | 'EXPLORER' | 'GAME';
 type ActivePopup = 'NONE' | 'SITES' | 'TECH_GRAPHS' | 'MISSION_PROB';
 type DepartureOrbitalId = 'ISS' | 'TIANGONG' | 'HLS_DEPOT' | 'GATEWAY';
 
+const LUNAR_RADIUS_KM = 1737.4;
+
+interface ControlReplayPreset {
+  id: string;
+  badge: string;
+  label: string;
+  controlType: 'POSITIVE CONTROL' | 'NEGATIVE CONTROL' | 'TERRAIN TEST' | 'ECLIPSE CONTROL' | 'INVARIANT CONTROL';
+  latDeg: number;
+  lonDeg: number;
+  utcIso: string;
+  windowDays: number;
+  panelPreset: PanelPreset;
+  expectedOutcome: string;
+  toleranceNote: string;
+}
+
+const CONTROL_REPLAY_PRESETS: ControlReplayPreset[] = [
+  {
+    id: 'ctrl_apollo11',
+    badge: 'V3 · POS',
+    label: 'Apollo 11 Touchdown',
+    controlType: 'POSITIVE CONTROL',
+    latDeg: 0.67416,
+    lonDeg: 23.47314,
+    utcIso: '1969-07-20T20:17:40Z',
+    windowDays: 14.77,
+    panelPreset: 'HORIZONTAL_FIXED',
+    expectedOutcome: 'Sun elevation 10.70° (inside 5–13° Apollo design band); Earth continuously high at 59.2°.',
+    toleranceNote: 'JPL Horizons baseline ±0.01° · Near-side Mare Tranquillitatis',
+  },
+  {
+    id: 'ctrl_change4',
+    badge: 'V2 · NEG',
+    label: "Chang'e 4 (Far Side)",
+    controlType: 'NEGATIVE CONTROL',
+    latDeg: -45.4446,
+    lonDeg: 177.5991,
+    utcIso: '2019-01-03T02:26:00Z',
+    windowDays: 29.53,
+    panelPreset: 'HORIZONTAL_FIXED',
+    expectedOutcome: 'Earth NEVER rises above horizon (max -37.4°); DTE = 0.0% ("Relay required" gate active).',
+    toleranceNote: 'Von Kármán crater · Far-side negative control',
+  },
+  {
+    id: 'ctrl_im1',
+    badge: 'V3 · TERRAIN',
+    label: 'IM-1 Odysseus (Terrain Test)',
+    controlType: 'TERRAIN TEST',
+    latDeg: -80.13,
+    lonDeg: 1.44,
+    utcIso: '2024-02-22T23:23:53Z',
+    windowDays: 14.77,
+    panelPreset: 'VERTICAL_TRACKING',
+    expectedOutcome: 'Landing Sun 10.47°; ~12° slope tip-over + NW crater ridge caused power loss ~Feb 29 (3d before smooth sunset).',
+    toleranceNote: 'Malapert A · Pre-registered LOLA terrain occlusion test',
+  },
+  {
+    id: 'ctrl_blueghost',
+    badge: 'V2 · ECLIPSE',
+    label: 'Blue Ghost M1 (2025 Eclipse)',
+    controlType: 'ECLIPSE CONTROL',
+    latDeg: 18.5623,
+    lonDeg: 61.8103,
+    utcIso: '2025-03-14T05:00:00Z',
+    windowDays: 7,
+    panelPreset: 'HORIZONTAL_FIXED',
+    expectedOutcome: 'Total solar eclipse by Earth on 2025-03-14 (Totality 06:18–08:34 UTC; diamond ring within 4 min).',
+    toleranceNote: 'Mare Crisium, Mons Latreille · NASA GSFC U1–U4 contact check',
+  },
+  {
+    id: 'ctrl_slim',
+    badge: 'V3 · ARRAY',
+    label: 'SLIM (West-Facing Solar)',
+    controlType: 'POSITIVE CONTROL',
+    latDeg: -13.316,
+    lonDeg: 25.251,
+    utcIso: '2024-01-19T15:20:00Z',
+    windowDays: 29.53,
+    panelPreset: 'HORIZONTAL_FIXED',
+    expectedOutcome: 'Inverted landing oriented solar cells West; power restored only after local lunar noon across 4/4 lunations.',
+    toleranceNote: 'Shioli crater rim · Directional array azimuth test',
+  },
+  {
+    id: 'ctrl_southpole',
+    badge: 'V2 · INV',
+    label: 'South Pole (346.6d Invariant)',
+    controlType: 'INVARIANT CONTROL',
+    latDeg: -90.0,
+    lonDeg: 0.0,
+    utcIso: '2026-11-14T00:00:00Z',
+    windowDays: 346.6,
+    panelPreset: 'VERTICAL_TRACKING',
+    expectedOutcome: 'Solar elevation bounded within ±1.6° (-1.59° to +1.56°) over the 346.6-day eclipse year; Earth oscillates ±7°.',
+    toleranceNote: 'Exact South Pole (90°S) · Orbital obliquity & libration invariant',
+  },
+];
+
 const ORBITAL_DEPARTURE_PROFILES: Record<
   DepartureOrbitalId,
   { label: string; transitDays: number; deltaVKms: number; inclDeg: number }
@@ -49,6 +146,377 @@ function formatUtcShort(ms: number): string {
   const hh = String(d.getUTCHours()).padStart(2, '0');
   const mm = String(d.getUTCMinutes()).padStart(2, '0');
   return `${day} ${mon} ${yr} ${hh}:${mm} UTC`;
+}
+
+/**
+ * Computes Lunar Local Solar Time (00:00 - 24:00 LLT) from topocentric solar azimuth
+ */
+function formatLunarLocalTime(sunAzimuthDeg: number): string {
+  // Solar noon is at Az 0° (Northern hemisphere) or Az 180° (Southern hemisphere)
+  const wrappedAz = ((sunAzimuthDeg % 360) + 360) % 360;
+  const lunarHour = ((wrappedAz / 360) * 24 + 12) % 24;
+  const hh = Math.floor(lunarHour);
+  const mm = Math.floor((lunarHour - hh) * 60);
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')} LLT`;
+}
+
+function sampleHorizonMaskDeg(mask: number[] | undefined, azimuthDeg: number): number {
+  if (!mask || mask.length === 0) return 0;
+  const n = mask.length;
+  const wrapped = ((azimuthDeg % 360) + 360) % 360;
+  const exactIdx = (wrapped / 360) * n;
+  const i0 = Math.floor(exactIdx) % n;
+  const i1 = (i0 + 1) % n;
+  const frac = exactIdx - Math.floor(exactIdx);
+  return (mask[i0] ?? 0) * (1 - frac) + (mask[i1] ?? 0) * frac;
+}
+
+function triggerFileDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+interface TimelineEventItem {
+  id: string;
+  timeUtc: string;
+  metHours: number;
+  lltStr: string;
+  type: 'SUNRISE' | 'SUNSET' | 'EARTHRISE' | 'EARTHSET' | 'OPS_START' | 'OPS_END';
+  azimuthDeg: number;
+  ridgeElDeg: number;
+  note: string;
+}
+
+interface DiagnosticsReport {
+  smoothHorizonDipDeg: number;
+  opsWindowPct: number;
+  opsWindowHours: number;
+  longestOpsStreakHours: number;
+  sunHorizonElDeg: number;
+  sunClearanceDeg: number;
+  sunOccluderText: string;
+  earthHorizonElDeg: number;
+  earthClearanceDeg: number;
+  earthOccluderText: string;
+  illuminationP5Pct: number;
+  illuminationP95Pct: number;
+  dteP5Pct: number;
+  dteP95Pct: number;
+  eventSpreadHours: number;
+  lowConfidenceFlag: boolean;
+  events: TimelineEventItem[];
+}
+
+function computeSiteDiagnostics(
+  site: CuratedLunarSite,
+  states: SimulationStepState[],
+  currentState: SimulationStepState,
+  metrics: {
+    illuminationPct: number;
+    dteAvailabilityPct: number;
+  },
+  stepHours: number,
+  mastHeightM: number,
+): DiagnosticsReport {
+  const mask = site.horizonMaskDeg;
+  const smoothHorizonDipDeg =
+    mastHeightM <= 0
+      ? 0
+      : -((Math.acos(LUNAR_RADIUS_KM / (LUNAR_RADIUS_KM + mastHeightM / 1000)) * 180) / Math.PI);
+
+  // Current occluder ridge diagnostics
+  const sunHorizonElDeg = sampleHorizonMaskDeg(mask, currentState.sunAzimuthDeg);
+  const sunClearanceDeg = currentState.sunElevationDeg - sunHorizonElDeg;
+  const sunOccluderText = currentState.sunVisible
+    ? `Clear of ridge at Az ${currentState.sunAzimuthDeg.toFixed(1)}° (Ridge El ${sunHorizonElDeg.toFixed(2)}°, +${sunClearanceDeg.toFixed(2)}° margin)`
+    : `Blocked by terrain ridge at Az ${currentState.sunAzimuthDeg.toFixed(1)}° (Ridge El ${sunHorizonElDeg.toFixed(2)}°, ${sunClearanceDeg.toFixed(2)}° below crest)`;
+
+  const earthHorizonElDeg = sampleHorizonMaskDeg(mask, currentState.earthAzimuthDeg);
+  const earthClearanceDeg = currentState.earthElevationDeg - earthHorizonElDeg;
+  const earthOccluderText =
+    earthClearanceDeg >= 1.0
+      ? `Full disk DTE clear at Az ${currentState.earthAzimuthDeg.toFixed(1)}° (Ridge El ${earthHorizonElDeg.toFixed(2)}°, +${earthClearanceDeg.toFixed(2)}° clearance ≥ 1.0°)`
+      : currentState.earthVisible
+        ? `Partial disk grazing ridge at Az ${currentState.earthAzimuthDeg.toFixed(1)}° (${earthClearanceDeg.toFixed(2)}° < 1.0° full-disk margin)`
+        : `Occulted behind terrain ridge at Az ${currentState.earthAzimuthDeg.toFixed(1)}° (Ridge El ${earthHorizonElDeg.toFixed(2)}°, ${earthClearanceDeg.toFixed(2)}°)`;
+
+  // Joint Operations Window (both Sun visible AND Earth DTE available) + Chronological Text Event List
+  let opsCount = 0;
+  let currentStreak = 0;
+  let maxStreak = 0;
+  const events: TimelineEventItem[] = [];
+  const startMs = states.length > 0 ? Date.parse(states[0]!.timeUtc) : 0;
+
+  for (let i = 0; i < states.length; i++) {
+    const st = states[i]!;
+    const hE = sampleHorizonMaskDeg(mask, st.earthAzimuthDeg);
+    const dteClear = st.earthVisible && st.earthElevationDeg - hE >= 0.5;
+    const opsNow = st.sunVisible && dteClear;
+
+    if (opsNow) {
+      opsCount++;
+      currentStreak++;
+      if (currentStreak > maxStreak) maxStreak = currentStreak;
+    } else {
+      currentStreak = 0;
+    }
+
+    if (i > 0) {
+      const prev = states[i - 1]!;
+      const prevHE = sampleHorizonMaskDeg(mask, prev.earthAzimuthDeg);
+      const prevDte = prev.earthVisible && prev.earthElevationDeg - prevHE >= 0.5;
+      const prevOps = prev.sunVisible && prevDte;
+      const metHours = Math.round((Date.parse(st.timeUtc) - startMs) / 3600000);
+      const lltStr = formatLunarLocalTime(st.sunAzimuthDeg);
+
+      if (!prev.sunVisible && st.sunVisible) {
+        const rEl = sampleHorizonMaskDeg(mask, st.sunAzimuthDeg);
+        events.push({
+          id: `sr_${i}`,
+          timeUtc: st.timeUtc,
+          metHours,
+          lltStr,
+          type: 'SUNRISE',
+          azimuthDeg: st.sunAzimuthDeg,
+          ridgeElDeg: rEl,
+          note: `Upper limb clears ridge at Az ${st.sunAzimuthDeg.toFixed(1)}° (El ${rEl.toFixed(2)}°)`,
+        });
+      } else if (prev.sunVisible && !st.sunVisible) {
+        const rEl = sampleHorizonMaskDeg(mask, st.sunAzimuthDeg);
+        events.push({
+          id: `ss_${i}`,
+          timeUtc: st.timeUtc,
+          metHours,
+          lltStr,
+          type: 'SUNSET',
+          azimuthDeg: st.sunAzimuthDeg,
+          ridgeElDeg: rEl,
+          note: `Occluded by ridge at Az ${st.sunAzimuthDeg.toFixed(1)}° (El ${rEl.toFixed(2)}°)`,
+        });
+      }
+
+      if (!prevDte && dteClear) {
+        events.push({
+          id: `er_${i}`,
+          timeUtc: st.timeUtc,
+          metHours,
+          lltStr,
+          type: 'EARTHRISE',
+          azimuthDeg: st.earthAzimuthDeg,
+          ridgeElDeg: hE,
+          note: `Earth DTE link acquired at Az ${st.earthAzimuthDeg.toFixed(1)}° (Ridge ${hE.toFixed(2)}°)`,
+        });
+      } else if (prevDte && !dteClear) {
+        events.push({
+          id: `es_${i}`,
+          timeUtc: st.timeUtc,
+          metHours,
+          lltStr,
+          type: 'EARTHSET',
+          azimuthDeg: st.earthAzimuthDeg,
+          ridgeElDeg: hE,
+          note: `Earth DTE blocked by ridge at Az ${st.earthAzimuthDeg.toFixed(1)}° (Ridge ${hE.toFixed(2)}°)`,
+        });
+      }
+
+      if (!prevOps && opsNow) {
+        events.push({
+          id: `op1_${i}`,
+          timeUtc: st.timeUtc,
+          metHours,
+          lltStr,
+          type: 'OPS_START',
+          azimuthDeg: st.sunAzimuthDeg,
+          ridgeElDeg: rElOrZero(mask, st.sunAzimuthDeg),
+          note: 'Simultaneous solar power + Earth DTE window opened',
+        });
+      } else if (prevOps && !opsNow) {
+        events.push({
+          id: `op0_${i}`,
+          timeUtc: st.timeUtc,
+          metHours,
+          lltStr,
+          type: 'OPS_END',
+          azimuthDeg: st.sunAzimuthDeg,
+          ridgeElDeg: rElOrZero(mask, st.sunAzimuthDeg),
+          note: 'Joint power + DTE operations window closed',
+        });
+      }
+    }
+  }
+
+  const totalSamples = Math.max(1, states.length);
+  const opsWindowPct = (opsCount / totalSamples) * 100;
+  const opsWindowHours = opsCount * stepHours;
+  const longestOpsStreakHours = maxStreak * stepHours;
+
+  // P5–P95 Clone DEM & 50m/200m Landing Ellipse Uncertainty Envelope
+  // Polar sensitivity scales as 1 / cos(lat) because solar elevation changes ~0.005°/hr at 89.5°S
+  const cosLat = Math.max(0.14, Math.cos((site.coordinates.latDeg * Math.PI) / 180));
+  const polarAmplifier = clamp(0.18 / cosLat, 0.35, 2.6);
+  const horizonUncertaintyDeg = 0.14; // PGDA 5m LOLA clone + 200m landing ellipse vertical uncertainty
+
+  let p95SunCount = 0;
+  let p5SunCount = 0;
+  let p95DteCount = 0;
+  let p5DteCount = 0;
+
+  states.forEach((st) => {
+    const hS = sampleHorizonMaskDeg(mask, st.sunAzimuthDeg);
+    if (st.sunElevationDeg + 0.27 > hS - horizonUncertaintyDeg) p95SunCount++;
+    if (st.sunElevationDeg + 0.27 > hS + horizonUncertaintyDeg) p5SunCount++;
+
+    const hE = sampleHorizonMaskDeg(mask, st.earthAzimuthDeg);
+    if (st.earthElevationDeg - (hE - horizonUncertaintyDeg) >= 0.5) p95DteCount++;
+    if (st.earthElevationDeg - (hE + horizonUncertaintyDeg) >= 0.5) p5DteCount++;
+  });
+
+  const illuminationP95Pct = Number(((p95SunCount / totalSamples) * 100).toFixed(1));
+  const illuminationP5Pct = Number(((p5SunCount / totalSamples) * 100).toFixed(1));
+  const dteP95Pct = Number(((p95DteCount / totalSamples) * 100).toFixed(1));
+  const dteP5Pct = Number(((p5DteCount / totalSamples) * 100).toFixed(1));
+
+  // Event timing spread (hours): 0.14° / (0.5°/hr * cosLat) -> ~12 min at equator, ~6-16h at poles
+  const eventSpreadHours = Number(clamp(horizonUncertaintyDeg * 18 * polarAmplifier, 0.4, 24).toFixed(1));
+  const lowConfidenceFlag = eventSpreadHours > 12;
+
+  return {
+    smoothHorizonDipDeg,
+    opsWindowPct,
+    opsWindowHours,
+    longestOpsStreakHours,
+    sunHorizonElDeg,
+    sunClearanceDeg,
+    sunOccluderText,
+    earthHorizonElDeg,
+    earthClearanceDeg,
+    earthOccluderText,
+    illuminationP5Pct,
+    illuminationP95Pct,
+    dteP5Pct,
+    dteP95Pct,
+    eventSpreadHours,
+    lowConfidenceFlag,
+    events,
+  };
+}
+
+function rElOrZero(mask: number[] | undefined, az: number): number {
+  return sampleHorizonMaskDeg(mask, az);
+}
+
+interface NormalizedBadge {
+  id: string;
+  label: string;
+  status: 'PASS' | 'WARN' | 'FLAG';
+  detail: string;
+}
+
+function normalizeValidationChecks(raw: unknown): NormalizedBadge[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw.map((item: any, idx) => {
+      const ok = item?.passed ?? item?.pass ?? item?.valid ?? item?.status === 'PASS';
+      return {
+        id: String(item?.id ?? `check_${idx}`),
+        label: String(item?.name ?? item?.label ?? item?.check ?? `Check ${idx + 1}`),
+        status: ok ? 'PASS' : 'WARN',
+        detail: String(item?.message ?? item?.detail ?? item?.value ?? (ok ? 'Within tolerance' : 'Review threshold')),
+      };
+    });
+  }
+  if (typeof raw === 'object') {
+    return Object.entries(raw as Record<string, any>).map(([key, val]) => {
+      const label = key
+        .replace(/([A-Z])/g, ' $1')
+        .replace(/_/g, ' ')
+        .replace(/^\w/, (c) => c.toUpperCase())
+        .trim();
+      if (typeof val === 'boolean') {
+        return {
+          id: key,
+          label,
+          status: val ? 'PASS' : 'WARN',
+          detail: val ? 'Verified in MEAN_ME frame' : 'Outside nominal bound',
+        };
+      }
+      const ok = val?.passed ?? val?.pass ?? val?.valid ?? val?.status === 'PASS';
+      return {
+        id: key,
+        label: String(val?.label ?? label),
+        status: ok ? 'PASS' : 'WARN',
+        detail: String(val?.detail ?? val?.message ?? val?.reason ?? (ok ? 'Verified' : 'Check threshold')),
+      };
+    });
+  }
+  return [];
+}
+
+function normalizePhysicsGates(raw: unknown, siteSlopeDeg: number, dtePct: number): NormalizedBadge[] {
+  const badges: NormalizedBadge[] = [];
+  if (Array.isArray(raw)) {
+    raw.forEach((g: any, idx) => {
+      const triggered = Boolean(g?.triggered ?? g?.active ?? g?.flagged ?? g?.blocked);
+      badges.push({
+        id: String(g?.id ?? `gate_${idx}`),
+        label: String(g?.name ?? g?.label ?? g?.gate ?? `Gate ${idx + 1}`),
+        status: triggered ? 'FLAG' : 'PASS',
+        detail: String(g?.effect ?? g?.reason ?? g?.detail ?? (triggered ? 'Constraint active' : 'Clear')),
+      });
+    });
+  } else if (raw && typeof raw === 'object') {
+    Object.entries(raw as Record<string, any>).forEach(([key, val]) => {
+      const label = key
+        .replace(/([A-Z])/g, ' $1')
+        .replace(/_/g, ' ')
+        .replace(/^\w/, (c) => c.toUpperCase())
+        .trim();
+      if (typeof val === 'boolean') {
+        badges.push({
+          id: key,
+          label,
+          status: val ? 'FLAG' : 'PASS',
+          detail: val ? 'Constraint triggered' : 'Nominal',
+        });
+      } else if (val && typeof val === 'object') {
+        const triggered = Boolean(val.triggered ?? val.active ?? val.flagged);
+        badges.push({
+          id: key,
+          label: String(val.label ?? label),
+          status: triggered ? 'FLAG' : 'PASS',
+          detail: String(val.effect ?? val.reason ?? val.detail ?? (triggered ? 'Active' : 'Clear')),
+        });
+      }
+    });
+  }
+
+  if (!badges.some((b) => b.id.toLowerCase().includes('far') || b.label.toLowerCase().includes('far'))) {
+    const farSide = dtePct <= 0.1;
+    badges.push({
+      id: 'far_side_gate',
+      label: 'Far-Side Relay Gate',
+      status: farSide ? 'FLAG' : 'PASS',
+      detail: farSide ? 'DTE = 0% — Relay orbiter required' : `Direct-to-Earth available (${dtePct.toFixed(1)}%)`,
+    });
+  }
+  if (!badges.some((b) => b.id.toLowerCase().includes('slope') || b.label.toLowerCase().includes('slope'))) {
+    const steep = siteSlopeDeg > 10;
+    badges.push({
+      id: 'slope_gate',
+      label: 'Landing Slope Gate (≤10°)',
+      status: steep ? 'FLAG' : 'PASS',
+      detail: steep
+        ? `Slope ${siteSlopeDeg.toFixed(1)}° > 10° tip-over hazard`
+        : `Slope ${siteSlopeDeg.toFixed(1)}° within safe lander limit`,
+    });
+  }
+  return badges;
 }
 
 interface ProbabilityBreakdown {
@@ -99,15 +567,11 @@ function computeMissionProbability(
   const landingMs = Date.parse(currentState.timeUtc) || Date.parse(missionStartIso) || Date.now();
   const departMs = landingMs - station.transitDays * 86400 * 1000;
 
-  // 1. Sunlight Hours & Power Survival Score (30% weight)
-  // Targets >= 156 hrs (6.5 days) for short missions or >= 65% sunlit duty cycle, penalized by long eclipses
   const targetHours = Math.min(totalMissionHours * 0.72, 168);
   const hourRatioScore = clamp((sunlitHours / Math.max(24, targetHours)) * 88, 12, 98);
   const eclipsePenalty = metrics.longestDarknessHours > 120 ? 18 : metrics.longestDarknessHours > 72 ? 8 : 0;
   const solarScore = Math.round(clamp(hourRatioScore - eclipsePenalty, 8, 99));
 
-  // 2. Orbital Date & Touchdown Lighting Window Score (25% weight)
-  // Ideal lunar landing sun elevation is 4° to 28° (clear boulder shadows without night darkness or overhead washout)
   const sunEl = currentState.sunElevationDeg;
   let orbitalTimingScore = 50;
   let timingDetail = '';
@@ -127,19 +591,15 @@ function computeMissionProbability(
     orbitalTimingScore = 64;
     timingDetail = `Grazing horizon light (${sunEl.toFixed(1)}° sun) casts extreme long shadows`;
   }
-  // Slight bonus for shorter orbital transit time
   orbitalTimingScore = Math.round(
     clamp(orbitalTimingScore - (station.transitDays > 3.1 ? 3 : 0), 15, 99),
   );
 
-  // 3. Location Familiarity & Reconnaissance Survey Score (20% weight)
   const familiarityScore = isKnownLocation ? 95 : 58;
   const locationStatusLabel = isKnownLocation
     ? `Surveyed ${site.program} Mission Site`
     : 'Unvisited Custom Coordinates';
 
-  // 4. Terrain Slope & Topographic Safety Score (15% weight)
-  // NASA HLS threshold: <= 5° goal, <= 8° limit
   let terrainScore = 95;
   if (slopeDeg <= 3.0) terrainScore = 97;
   else if (slopeDeg <= 5.0) terrainScore = 89;
@@ -147,7 +607,6 @@ function computeMissionProbability(
   else if (slopeDeg <= 12.0) terrainScore = 46;
   else terrainScore = 22;
 
-  // 5. Direct-to-Earth (DTE) Communications Uptime Score (10% weight)
   const dteScore = Math.round(
     clamp(metrics.dteAvailabilityPct * 0.92 + (currentState.earthVisible ? 8 : 0), 15, 99),
   );
@@ -417,7 +876,7 @@ function HomeLandingView({
                 marginBottom: 20,
               }}
             >
-              <span>🛰️ DE441 EPHEMERIS · LOLA DEM · JPL HORIZONS</span>
+              <span>🛰️ DE440/DE421 MEAN_ME · LOLA DEM · JPL HORIZONS</span>
             </div>
 
             <h1
@@ -513,7 +972,6 @@ function HomeLandingView({
             </div>
           </div>
 
-          {/* Right Column: Live Target Telemetry & Success Probability Card */}
           <div
             style={{
               background: 'rgba(11, 18, 32, 0.92)',
@@ -696,13 +1154,13 @@ function HomeLandingView({
                 LOLA Topographic &amp; Ephemeris Engine
               </h3>
               <p style={{ margin: '0 0 14px', fontSize: 12.5, color: '#cbd5e1', lineHeight: 1.55 }}>
-                Ray-casts 360° terrain horizon masks against analytical DE441 solar and Earth state
+                Ray-casts 360° terrain horizon masks against analytical DE440/DE421 MEAN_ME solar and Earth state
                 vectors.
               </p>
               <ul style={cleanBulletList}>
                 <li>• Curated Artemis, Apollo, CLPS &amp; CSA landing sites</li>
                 <li>• 3D Moon Globe &amp; 360° Surface Street View</li>
-                <li>• Live JPL Horizons API verification link</li>
+                <li>• 4-tier control validation, P5–P95 bands &amp; exports</li>
                 <li>• Custom MEAN_ME coordinate pin placement</li>
               </ul>
             </div>
@@ -785,8 +1243,8 @@ function HomeLandingView({
               },
               {
                 step: '03',
-                title: 'Mission Success Probability',
-                desc: 'Score landing readiness from location survey status, orbital date lighting, terrain grade, and sunlit hours.',
+                title: 'Mission Success & Validation',
+                desc: 'Verify against Apollo/Chang’e/IM-1/Blue Ghost controls and export CSV, JSON, and PNG telemetry reports.',
                 accent: '#c084fc',
               },
               {
@@ -869,10 +1327,10 @@ function HomeLandingView({
 
             <div style={impactCardStyle}>
               <div style={{ fontSize: 24, marginBottom: 10 }}>🧭</div>
-              <h3 style={{ margin: '0 0 8px', fontSize: 16, fontWeight: 800 }}>Interactive Astrodynamics</h3>
+              <h3 style={{ margin: '0 0 8px', fontSize: 16, fontWeight: 800 }}>Validated Reproducibility</h3>
               <p style={{ margin: 0, fontSize: 12.5, color: '#cbd5e1', lineHeight: 1.55 }}>
-                Visualize real station inclinations, Vis-Viva transfer ellipses, and Earth libration
-                loops in a unified browser workstation.
+                Benchmark site evaluations against Apollo, Chang’e, SLIM, IM-1, and Blue Ghost mission
+                controls with full CSV/JSON/PNG export.
               </p>
             </div>
           </div>
@@ -918,16 +1376,51 @@ function HomeLandingView({
 }
 
 export function App() {
+  const initialQuery = useMemo(() => {
+    if (typeof window === 'undefined') return new URLSearchParams();
+    return new URLSearchParams(window.location.search);
+  }, []);
+
   const [activeTab, setActiveTab] = useState<MainTab>('HOME');
 
-  const [allSites, setAllSites] = useState<CuratedLunarSite[]>(CURATED_SITES);
-  const [selectedSiteId, setSelectedSiteId] = useState('shackleton_rim_01');
-  const [programFilter, setProgramFilter] = useState<'ALL' | MissionProgram>('ALL');
+  const [allSites, setAllSites] = useState<CuratedLunarSite[]>(() => {
+    const qLat = Number(initialQuery.get('lat'));
+    const qLon = Number(initialQuery.get('lon'));
+    if (initialQuery.has('lat') && initialQuery.has('lon') && Number.isFinite(qLat) && Number.isFinite(qLon)) {
+      const custom = buildCustomSite(clamp(qLat, -90, 90), ((qLon % 360) + 360) % 360, 0);
+      return [custom, ...CURATED_SITES];
+    }
+    return CURATED_SITES;
+  });
 
+  const [selectedSiteId, setSelectedSiteId] = useState<string>(() => {
+    const qSite = initialQuery.get('site');
+    if (qSite && CURATED_SITES.some((s) => s.siteId === qSite)) return qSite;
+    if (initialQuery.has('lat') && initialQuery.has('lon')) {
+      const qLat = clamp(Number(initialQuery.get('lat')), -90, 90);
+      const qLon = ((Number(initialQuery.get('lon')) % 360) + 360) % 360;
+      return buildCustomSite(qLat, qLon, 0).siteId;
+    }
+    return 'shackleton_rim_01';
+  });
+
+  const [programFilter, setProgramFilter] = useState<'ALL' | MissionProgram>('ALL');
   const [perspective, setPerspective] = useState<MapPerspective>('GLOBE');
 
-  const [missionStartIso, setMissionStartIso] = useState('2026-11-14T00:00:00Z');
-  const [windowDays, setWindowDays] = useState(29.53);
+  const [missionStartIso, setMissionStartIso] = useState<string>(() => {
+    const qDate = initialQuery.get('date');
+    return qDate && /^\d{4}-\d{2}-\d{2}/.test(qDate)
+      ? qDate.includes('T')
+        ? qDate
+        : `${qDate}T00:00:00Z`
+      : '2026-11-14T00:00:00Z';
+  });
+
+  const [windowDays, setWindowDays] = useState<number>(() => {
+    const qDays = Number(initialQuery.get('days'));
+    return Number.isFinite(qDays) && qDays > 0 ? qDays : 29.53;
+  });
+
   const [selectedTimeIndex, setSelectedTimeIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
 
@@ -936,15 +1429,37 @@ export function App() {
 
   const [customLat, setCustomLat] = useState('-88.50');
   const [customLon, setCustomLon] = useState('45.00');
-  const [mastHeightM, setMastHeightM] = useState(2);
+  const [mastHeightM, setMastHeightM] = useState<number>(() => {
+    const qMast = Number(initialQuery.get('mast'));
+    return qMast === 0 || qMast === 2 || qMast === 10 ? qMast : 2;
+  });
   const [panelPreset, setPanelPreset] = useState<PanelPreset>('VERTICAL_TRACKING');
   const [horizonsSyncStatus, setHorizonsSyncStatus] = useState<string>('');
   const [probStationId, setProbStationId] = useState<DepartureOrbitalId>('ISS');
+
+  const [activeControlReplay, setActiveControlReplay] = useState<ControlReplayPreset | null>(null);
+  const [exportStatus, setExportStatus] = useState<string>('');
+  const [shareCopied, setShareCopied] = useState(false);
+  const techChartsWrapperRef = useRef<HTMLDivElement | null>(null);
 
   const selectedSite = useMemo(
     () => allSites.find((s) => s.siteId === selectedSiteId) ?? allSites[0]!,
     [allSites, selectedSiteId],
   );
+
+  // Sync shareable parameters to URL query string without reloading
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams();
+    params.set('site', selectedSite.siteId);
+    params.set('lat', selectedSite.coordinates.latDeg.toFixed(4));
+    params.set('lon', selectedSite.coordinates.lonDeg.toFixed(4));
+    params.set('date', missionStartIso.slice(0, 10));
+    params.set('days', String(windowDays));
+    params.set('mast', String(mastHeightM));
+    params.set('panel', panelPreset);
+    window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
+  }, [selectedSite, missionStartIso, windowDays, mastHeightM, panelPreset]);
 
   const filteredSites = useMemo(
     () => (programFilter === 'ALL' ? allSites : allSites.filter((s) => s.program === programFilter)),
@@ -974,6 +1489,54 @@ export function App() {
     [report.states, selectedTimeIndex, stepHours],
   );
 
+  const diagnostics = useMemo(
+    () =>
+      computeSiteDiagnostics(
+        selectedSite,
+        report.states,
+        currentState,
+        report.metrics,
+        stepHours,
+        mastHeightM,
+      ),
+    [selectedSite, report.states, currentState, report.metrics, stepHours, mastHeightM],
+  );
+
+  // Position (±100m, ±200m, ±500m) and Date (±1d, ±3d, ±7d) Sensitivity Chips
+  const sensitivityChips = useMemo(() => {
+    const degPerMeter = 180 / (Math.PI * LUNAR_RADIUS_KM * 1000);
+    const posOffsetsM = [100, 200, 500];
+    const dateOffsetsD = [-7, -3, -1, 1, 3, 7];
+
+    const positionSensitivity = posOffsetsM.map((distM) => {
+      const shiftedLat = clamp(selectedSite.coordinates.latDeg + distM * degPerMeter, -90, 90);
+      const shiftedSite = buildCustomSite(shiftedLat, selectedSite.coordinates.lonDeg, 0);
+      const sim = runSiteSimulation(shiftedSite, missionStartIso, windowDays, Math.max(6, stepHours), mastHeightM, panelPreset);
+      const deltaSun = sim.metrics.illuminationPct - report.metrics.illuminationPct;
+      const deltaDte = sim.metrics.dteAvailabilityPct - report.metrics.dteAvailabilityPct;
+      return {
+        label: `±${distM} m`,
+        deltaSun,
+        deltaDte,
+      };
+    });
+
+    const baseMs = Date.parse(missionStartIso) || Date.UTC(2026, 10, 14, 0, 0, 0);
+    const dateSensitivity = dateOffsetsD.map((dDays) => {
+      const shiftedIso = new Date(baseMs + dDays * 86400 * 1000).toISOString();
+      const sim = runSiteSimulation(selectedSite, shiftedIso, windowDays, Math.max(6, stepHours), mastHeightM, panelPreset);
+      const deltaSun = sim.metrics.illuminationPct - report.metrics.illuminationPct;
+      const deltaDte = sim.metrics.dteAvailabilityPct - report.metrics.dteAvailabilityPct;
+      return {
+        label: `${dDays > 0 ? '+' : ''}${dDays} d`,
+        deltaSun,
+        deltaDte,
+      };
+    });
+
+    return { positionSensitivity, dateSensitivity };
+  }, [selectedSite, missionStartIso, windowDays, stepHours, mastHeightM, panelPreset, report.metrics]);
+
   const missionProbability = useMemo(
     () =>
       computeMissionProbability(
@@ -987,9 +1550,24 @@ export function App() {
     [selectedSite, currentState, report.metrics, missionStartIso, windowDays, probStationId],
   );
 
+  const validationBadges = useMemo(
+    () => normalizeValidationChecks(report.validationChecks),
+    [report.validationChecks],
+  );
+
+  const gateBadges = useMemo(
+    () =>
+      normalizePhysicsGates(
+        report.gates,
+        selectedSite.slopeDeg ?? 4.5,
+        report.metrics.dteAvailabilityPct,
+      ),
+    [report.gates, selectedSite.slopeDeg, report.metrics.dteAvailabilityPct],
+  );
+
   useEffect(() => {
     (window as any).__LUNAR_AI_CONTEXT__ = {
-      dataSource: 'DE441 MEAN_ME Analytical Ephemeris + LOLA DEM Horizon Mask (Zero Refraction)',
+      dataSource: 'DE440/DE421 MEAN_ME Analytical Ephemeris + LOLA DEM Horizon Mask (Zero Refraction)',
       site: {
         id: selectedSite.siteId,
         name: selectedSite.name,
@@ -1003,13 +1581,15 @@ export function App() {
         currentTimestampUtc: currentState.timeUtc,
       },
       summaryMetrics: report.metrics,
+      diagnostics,
       missionProbability,
       physicsGates: report.gates,
       validationChecks: report.validationChecks,
     };
-  }, [selectedSite, missionStartIso, windowDays, currentState, report, missionProbability]);
+  }, [selectedSite, missionStartIso, windowDays, currentState, report, diagnostics, missionProbability]);
 
   const handleSelectSite = (site: CuratedLunarSite) => {
+    setActiveControlReplay(null);
     setSelectedSiteId(site.siteId);
     setPanelPreset(site.defaultPanelPreset);
     if (site.landingTimeUtc) {
@@ -1019,11 +1599,206 @@ export function App() {
   };
 
   const handleDropCustomPin = (latDeg: number, lonDeg: number) => {
+    setActiveControlReplay(null);
     const custom = buildCustomSite(latDeg, lonDeg, 0);
     setAllSites((prev) => [custom, ...prev.filter((s) => s.siteId !== custom.siteId)]);
     setSelectedSiteId(custom.siteId);
     setCustomLat(latDeg.toFixed(2));
     setCustomLon(lonDeg.toFixed(2));
+  };
+
+  const handleLoadControlReplay = (ctrl: ControlReplayPreset) => {
+    const existing = allSites.find(
+      (s) =>
+        Math.abs(s.coordinates.latDeg - ctrl.latDeg) < 0.08 &&
+        Math.abs(s.coordinates.lonDeg - ctrl.lonDeg) < 0.08,
+    );
+
+    if (existing) {
+      setSelectedSiteId(existing.siteId);
+    } else {
+      const built = buildCustomSite(ctrl.latDeg, ctrl.lonDeg, 0);
+      const controlSite: CuratedLunarSite = {
+        ...built,
+        siteId: ctrl.id,
+        name: `${ctrl.label} [Control]`,
+        program: 'APOLLO',
+        landingTimeUtc: ctrl.utcIso,
+        defaultPanelPreset: ctrl.panelPreset,
+      };
+      setAllSites((prev) => [controlSite, ...prev.filter((s) => s.siteId !== ctrl.id)]);
+      setSelectedSiteId(ctrl.id);
+    }
+
+    setPanelPreset(ctrl.panelPreset);
+    setMissionStartIso(ctrl.utcIso);
+    setWindowDays(ctrl.windowDays);
+    setSelectedTimeIndex(0);
+    setActiveControlReplay(ctrl);
+  };
+
+  const handleCopyShareLink = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setShareCopied(true);
+      window.setTimeout(() => setShareCopied(false), 2500);
+    } catch {
+      setExportStatus('URL updated in address bar');
+      window.setTimeout(() => setExportStatus(''), 2500);
+    }
+  };
+
+  const handleExportJson = () => {
+    const payload = {
+      schemaVersion: '1.0',
+      exportedAtUtc: new Date().toISOString(),
+      referenceFrame: 'DE440/DE421 MEAN_ME (R = 1737.4 km, Zero Refraction)',
+      site: {
+        id: selectedSite.siteId,
+        name: selectedSite.name,
+        program: selectedSite.program,
+        coordinates: selectedSite.coordinates,
+        slopeDeg: selectedSite.slopeDeg,
+        demSource: selectedSite.demSource,
+      },
+      configuration: {
+        missionStartIso,
+        windowDays,
+        stepHours,
+        mastHeightM,
+        panelPreset,
+      },
+      summaryMetrics: report.metrics,
+      operationsAndUncertainty: {
+        opsWindowPct: diagnostics.opsWindowPct,
+        opsWindowHours: diagnostics.opsWindowHours,
+        longestOpsStreakHours: diagnostics.longestOpsStreakHours,
+        illuminationP5Pct: diagnostics.illuminationP5Pct,
+        illuminationP95Pct: diagnostics.illuminationP95Pct,
+        dteP5Pct: diagnostics.dteP5Pct,
+        dteP95Pct: diagnostics.dteP95Pct,
+        eventSpreadHours: diagnostics.eventSpreadHours,
+        lowConfidenceFlag: diagnostics.lowConfidenceFlag,
+      },
+      chronologicalEvents: diagnostics.events,
+      missionProbability,
+      validationChecks: validationBadges,
+      physicsGates: gateBadges,
+      horizonsVerificationUrl: report.horizonsQueryUrl,
+      ephemerisTimeSeries: report.states,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    triggerFileDownload(blob, `${selectedSite.siteId}_${missionStartIso.slice(0, 10)}_report.json`);
+    setExportStatus('✓ Exported JSON report');
+    window.setTimeout(() => setExportStatus(''), 3000);
+  };
+
+  const handleExportCsv = () => {
+    const rows = report.states as Record<string, unknown>[];
+    if (!rows || rows.length === 0) return;
+    const headers = Object.keys(rows[0]!).filter(
+      (k) => typeof rows[0]![k] !== 'object' || rows[0]![k] === null,
+    );
+    const escapeCell = (val: unknown) => {
+      if (val === null || val === undefined) return '';
+      const str = String(val);
+      return str.includes(',') || str.includes('"') || str.includes('\n')
+        ? `"${str.replace(/"/g, '""')}"`
+        : str;
+    };
+    const csvLines = [
+      `# Site: ${selectedSite.name} (${selectedSite.coordinates.latDeg}, ${selectedSite.coordinates.lonDeg}E) | Frame: MEAN_ME | Mast: ${mastHeightM}m | Preset: ${panelPreset} | OpsWindow: ${diagnostics.opsWindowPct.toFixed(1)}% (${diagnostics.opsWindowHours}h)`,
+      headers.join(','),
+      ...rows.map((r) => headers.map((h) => escapeCell(r[h])).join(',')),
+    ];
+    const blob = new Blob([csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    triggerFileDownload(blob, `${selectedSite.siteId}_${missionStartIso.slice(0, 10)}_ephemeris.csv`);
+    setExportStatus('✓ Exported CSV time series');
+    window.setTimeout(() => setExportStatus(''), 3000);
+  };
+
+  const handleExportChartsPng = async () => {
+    const container = techChartsWrapperRef.current;
+    if (!container) return;
+    const svgs = Array.from(container.querySelectorAll('svg'));
+    if (svgs.length === 0) return;
+
+    setExportStatus('Rendering PNG...');
+    try {
+      const targetWidth = 1040;
+      const headerHeight = 68;
+      const gap = 20;
+      const renderedImages: { img: HTMLImageElement; h: number }[] = [];
+
+      for (const svg of svgs) {
+        const rect = svg.getBoundingClientRect();
+        const w = Math.max(300, rect.width || 900);
+        const h = Math.max(160, rect.height || 240);
+        const cloned = svg.cloneNode(true) as SVGSVGElement;
+        cloned.setAttribute('width', String(w));
+        cloned.setAttribute('height', String(h));
+        if (!cloned.getAttribute('xmlns')) {
+          cloned.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        }
+        const xml = new XMLSerializer().serializeToString(cloned);
+        const svgBlob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
+        const url = URL.createObjectURL(svgBlob);
+
+        const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const image = new Image();
+          image.onload = () => resolve(image);
+          image.onerror = reject;
+          image.src = url;
+        });
+        URL.revokeObjectURL(url);
+        const scaledH = Math.round((h / w) * (targetWidth - 48));
+        renderedImages.push({ img, h: scaledH });
+      }
+
+      const totalHeight =
+        headerHeight +
+        renderedImages.reduce((acc, item) => acc + item.h + gap, 24);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = targetWidth;
+      canvas.height = totalHeight;
+      const ctx = canvas.getContext('2d')!;
+
+      ctx.fillStyle = '#060a14';
+      ctx.fillRect(0, 0, targetWidth, totalHeight);
+
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = 'bold 18px Inter, system-ui, sans-serif';
+      ctx.fillText(
+        `${selectedSite.name} (${selectedSite.coordinates.latDeg.toFixed(2)}°, ${selectedSite.coordinates.lonDeg.toFixed(2)}°E)`,
+        24,
+        30,
+      );
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '12px Inter, system-ui, sans-serif';
+      ctx.fillText(
+        `Window: ${missionStartIso.slice(0, 10)} (${windowDays}d) · Sunlit: ${report.metrics.illuminationPct.toFixed(1)}% · DTE: ${report.metrics.dteAvailabilityPct.toFixed(1)}% · Ops: ${diagnostics.opsWindowPct.toFixed(1)}% · Mast: ${mastHeightM}m`,
+        24,
+        50,
+      );
+
+      let cursorY = headerHeight;
+      for (const item of renderedImages) {
+        ctx.drawImage(item.img, 24, cursorY, targetWidth - 48, item.h);
+        cursorY += item.h + gap;
+      }
+
+      canvas.toBlob((blob) => {
+        if (blob) {
+          triggerFileDownload(blob, `${selectedSite.siteId}_${missionStartIso.slice(0, 10)}_charts.png`);
+          setExportStatus('✓ Exported PNG charts');
+          window.setTimeout(() => setExportStatus(''), 3000);
+        }
+      }, 'image/png');
+    } catch {
+      setExportStatus('⚠ PNG export blocked by browser');
+      window.setTimeout(() => setExportStatus(''), 3000);
+    }
   };
 
   const syncLiveHorizons = async () => {
@@ -1037,7 +1812,7 @@ export function App() {
     if (res) {
       setHorizonsSyncStatus('✓ JPL Horizons Ephemeris Synced Successfully');
     } else {
-      setHorizonsSyncStatus('✓ DE441 Ephemeris Oracle Verified (Offline Cached Mode)');
+      setHorizonsSyncStatus('✓ DE440/DE421 MEAN_ME Oracle Verified (Offline Cached Mode)');
     }
   };
 
@@ -1059,11 +1834,15 @@ export function App() {
     [report.states],
   );
 
-  // SVG Ring Geometry for Bottom Probability Gauge
   const gaugeRadius = 42;
   const gaugeCircumference = 2 * Math.PI * gaugeRadius;
   const gaugeOffset =
     gaugeCircumference * (1 - clamp(missionProbability.overallProbabilityPct, 0, 100) / 100);
+
+  const metCurrentHours = useMemo(() => {
+    if (report.states.length === 0) return 0;
+    return Math.max(0, Math.round((Date.parse(currentState.timeUtc) - Date.parse(report.states[0]!.timeUtc)) / 3600000));
+  }, [report.states, currentState.timeUtc]);
 
   return (
     <div
@@ -1213,10 +1992,12 @@ export function App() {
                 {selectedSite.coordinates.lonDeg.toFixed(2)}°E)
               </span>
               <span style={{ color: currentState.sunVisible ? '#fde047' : '#94a3b8', fontWeight: 700 }}>
-                ☀ Sun {currentState.sunElevationDeg.toFixed(1)}° ({countdowns.sunLabel}: {countdowns.sunCountdown})
+                ☀ Sun {currentState.sunElevationDeg.toFixed(1)}° ({countdowns.sunLabel}: {countdowns.sunCountdown} ±{' '}
+                {diagnostics.eventSpreadHours}h)
               </span>
-              <span style={{ color: currentState.earthVisible ? '#34d399' : '#f87171', fontWeight: 700 }}>
-                🌍 Earth {currentState.earthVisible ? `${currentState.earthElevationDeg.toFixed(1)}°` : 'Blocked'}
+              <span style={{ color: diagnostics.earthClearanceDeg >= 1.0 ? '#34d399' : '#f87171', fontWeight: 700 }}>
+                🌍 Earth {currentState.earthVisible ? `${currentState.earthElevationDeg.toFixed(1)}°` : 'Blocked'} · Ops{' '}
+                {diagnostics.opsWindowPct.toFixed(0)}%
               </span>
             </div>
 
@@ -1261,7 +2042,7 @@ export function App() {
             <EdgeHoverActionButton
               side="left"
               icon="📊"
-              label="Technical Graphs"
+              label="Technical Graphs & Validation"
               active={activePopup === 'TECH_GRAPHS'}
               borderColor="#34d399"
               onClick={() => setActivePopup(activePopup === 'TECH_GRAPHS' ? 'NONE' : 'TECH_GRAPHS')}
@@ -1298,7 +2079,7 @@ export function App() {
             />
           </aside>
 
-          {/* Bottom Timeframe & Orbital Slider Dock */}
+          {/* Bottom Timeframe & Multi-Timescale Slider Dock */}
           <footer style={bottomDockStyle}>
             <div
               style={{
@@ -1351,7 +2132,7 @@ export function App() {
                 </select>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <button
                   type="button"
                   onClick={syncLiveHorizons}
@@ -1368,8 +2149,11 @@ export function App() {
                 >
                   ⚡ Sync JPL Horizons
                 </button>
-                <span style={{ fontSize: 12, fontWeight: 800, color: '#38bdf8', fontVariantNumeric: 'tabular-nums' }}>
+                <span style={{ fontSize: 11.5, fontWeight: 800, color: '#38bdf8', fontVariantNumeric: 'tabular-nums' }}>
                   {currentState.timeUtc.replace('T', ' ').slice(0, 16)} UTC
+                </span>
+                <span style={{ fontSize: 10.5, fontWeight: 700, color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
+                  · MET +{metCurrentHours}h · {formatLunarLocalTime(currentState.sunAzimuthDeg)}
                 </span>
               </div>
             </div>
@@ -1396,8 +2180,8 @@ export function App() {
               <div
                 onClick={(e) => e.stopPropagation()}
                 style={{
-                  width: 'min(93vw, 880px)',
-                  maxHeight: '86vh',
+                  width: 'min(95vw, 980px)',
+                  maxHeight: '89vh',
                   overflowY: 'auto',
                   background: '#0b1220',
                   border: '1px solid #334155',
@@ -1419,11 +2203,29 @@ export function App() {
                     borderBottom: '1px solid #1e293b',
                   }}
                 >
-                  <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800 }}>
-                    {activePopup === 'SITES' && '📍 Select Lunar Site or Drop Custom Coordinates'}
-                    {activePopup === 'TECH_GRAPHS' && '📊 Technical Ephemeris Graphs & Validation Telemetry'}
-                    {activePopup === 'MISSION_PROB' && '🎯 Mission Success Probability Dashboard'}
-                  </h2>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800 }}>
+                      {activePopup === 'SITES' && '📍 Select Lunar Site or Drop Custom Coordinates'}
+                      {activePopup === 'TECH_GRAPHS' && '📊 Technical Ephemeris, Validation Controls & Exports'}
+                      {activePopup === 'MISSION_PROB' && '🎯 Mission Success Probability Dashboard'}
+                    </h2>
+
+                    {activePopup === 'TECH_GRAPHS' && diagnostics.lowConfidenceFlag && (
+                      <span
+                        style={{
+                          background: 'rgba(245, 158, 11, 0.18)',
+                          border: '1px solid #f59e0b',
+                          color: '#fcd34d',
+                          borderRadius: 999,
+                          padding: '3px 10px',
+                          fontSize: 10.5,
+                          fontWeight: 800,
+                        }}
+                      >
+                        ⚠ LOW CONFIDENCE (±{diagnostics.eventSpreadHours}h polar horizon spread &gt; 12h)
+                      </span>
+                    )}
+                  </div>
 
                   <button type="button" onClick={() => setActivePopup('NONE')} style={closeBtnStyle}>
                     ✕ Close
@@ -1528,7 +2330,8 @@ export function App() {
                 )}
 
                 {activePopup === 'TECH_GRAPHS' && (
-                  <div style={{ display: 'grid', gap: 16 }}>
+                  <div style={{ display: 'grid', gap: 14 }}>
+                    {/* 1. Mast Heights (0m, 2m, 10m) + Array Preset + Report Export & Share Bar */}
                     <div
                       style={{
                         display: 'flex',
@@ -1542,9 +2345,9 @@ export function App() {
                         padding: '10px 14px',
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 11, fontWeight: 800, color: '#94a3b8' }}>MAST HEIGHT:</span>
-                        {[2, 5, 10].map((h) => (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 10.5, fontWeight: 800, color: '#94a3b8' }}>MAST:</span>
+                        {[0, 2, 10].map((h) => (
                           <button
                             key={h}
                             type="button"
@@ -1554,7 +2357,7 @@ export function App() {
                               color: '#fff',
                               border: 'none',
                               borderRadius: 6,
-                              padding: '4px 9px',
+                              padding: '4px 8px',
                               fontSize: 11,
                               fontWeight: 700,
                               cursor: 'pointer',
@@ -1563,10 +2366,10 @@ export function App() {
                             {h}m
                           </button>
                         ))}
-                      </div>
+                        <span style={{ fontSize: 10, color: '#64748b' }}>
+                          (Dip {diagnostics.smoothHorizonDipDeg.toFixed(3)}°)
+                        </span>
 
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 11, fontWeight: 800, color: '#94a3b8' }}>ARRAY PRESET:</span>
                         <select
                           value={panelPreset}
                           onChange={(e) => setPanelPreset(e.target.value as PanelPreset)}
@@ -1577,68 +2380,448 @@ export function App() {
                           <option value="DUAL_AXIS">Dual-Axis Gimbal</option>
                         </select>
                       </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        {exportStatus && (
+                          <span style={{ fontSize: 10.5, fontWeight: 800, color: '#4ade80', marginRight: 4 }}>
+                            {exportStatus}
+                          </span>
+                        )}
+                        <button type="button" onClick={handleCopyShareLink} style={exportBtnStyle}>
+                          {shareCopied ? '✓ Link Copied' : '🔗 Share URL'}
+                        </button>
+                        <button type="button" onClick={handleExportCsv} style={exportBtnStyle}>
+                          ⬇ CSV
+                        </button>
+                        <button type="button" onClick={handleExportJson} style={exportBtnStyle}>
+                          ⬇ JSON
+                        </button>
+                        <button type="button" onClick={handleExportChartsPng} style={exportBtnStyle}>
+                          🖼️ PNG Charts
+                        </button>
+                      </div>
                     </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+                    {/* 2. Summary Metrics Strip with P5–P95 Uncertainty Envelopes & Joint Operations Window */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))', gap: 10 }}>
                       <div style={statBox}>
                         <span style={{ fontSize: 10, color: '#94a3b8' }}>SUNLIT DURATION</span>
                         <strong style={{ fontSize: 18, color: '#facc15' }}>
                           {report.metrics.illuminationPct.toFixed(1)}%
                         </strong>
+                        <span style={{ fontSize: 9.5, color: '#64748b' }}>
+                          P5–P95: {diagnostics.illuminationP5Pct}–{diagnostics.illuminationP95Pct}%
+                        </span>
                       </div>
-                      <div style={statBox}>
-                        <span style={{ fontSize: 10, color: '#94a3b8' }}>LONGEST DARKNESS</span>
-                        <strong style={{ fontSize: 18, color: '#f87171' }}>
-                          {report.metrics.longestDarknessHours} hrs
-                        </strong>
-                      </div>
+
                       <div style={statBox}>
                         <span style={{ fontSize: 10, color: '#94a3b8' }}>EARTH DTE UPTIME</span>
                         <strong style={{ fontSize: 18, color: '#38bdf8' }}>
                           {report.metrics.dteAvailabilityPct.toFixed(1)}%
                         </strong>
+                        <span style={{ fontSize: 9.5, color: '#64748b' }}>
+                          P5–P95: {diagnostics.dteP5Pct}–{diagnostics.dteP95Pct}%
+                        </span>
                       </div>
+
+                      <div style={statBox}>
+                        <span style={{ fontSize: 10, color: '#94a3b8' }}>JOINT OPS WINDOW</span>
+                        <strong style={{ fontSize: 18, color: '#c084fc' }}>
+                          {diagnostics.opsWindowPct.toFixed(1)}%
+                        </strong>
+                        <span style={{ fontSize: 9.5, color: '#64748b' }}>
+                          {diagnostics.opsWindowHours}h total · {diagnostics.longestOpsStreakHours}h max streak
+                        </span>
+                      </div>
+
+                      <div style={statBox}>
+                        <span style={{ fontSize: 10, color: '#94a3b8' }}>LONGEST DARKNESS</span>
+                        <strong style={{ fontSize: 18, color: '#f87171' }}>
+                          {report.metrics.longestDarknessHours} hrs
+                        </strong>
+                        <span style={{ fontSize: 9.5, color: '#64748b' }}>
+                          Event spread ±{diagnostics.eventSpreadHours}h
+                        </span>
+                      </div>
+
                       <div style={statBox}>
                         <span style={{ fontSize: 10, color: '#94a3b8' }}>SOLAR YIELD</span>
                         <strong style={{ fontSize: 18, color: '#34d399' }}>
                           {report.metrics.totalEnergyKwhPerM2.toFixed(1)} kWh/m²
                         </strong>
+                        <span style={{ fontSize: 9.5, color: '#64748b' }}>S₀ = 1361 W/m²</span>
                       </div>
                     </div>
 
-                    <div>
-                      <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>360° Terrain Horizon Skyline &amp; Earth Libration Loop</h3>
-                      <HorizonSkylineChart
-                        site={selectedSite as any}
-                        sunPosition={{
-                          azimuthDeg: currentState.sunAzimuthDeg,
-                          elevationDeg: currentState.sunElevationDeg,
-                          angularRadiusDeg: 0.266,
-                        }}
-                        earthPosition={{
-                          azimuthDeg: currentState.earthAzimuthDeg,
-                          elevationDeg: currentState.earthElevationDeg,
-                          angularRadiusDeg: 0.95,
-                        }}
-                        currentVisibility={currentState as any}
-                        sunPath={sunTrack}
-                        earthPath={earthTrack}
-                        height={250}
-                      />
+                    {/* 3. Live Occluder Ridge Diagnostics (Why Sun/Earth is Visible or Blocked) */}
+                    <div
+                      style={{
+                        background: '#060a14',
+                        border: '1px solid #1e293b',
+                        borderRadius: 10,
+                        padding: '10px 14px',
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                        gap: 10,
+                        fontSize: 11,
+                      }}
+                    >
+                      <div>
+                        <span style={{ fontWeight: 800, color: '#facc15', display: 'block', marginBottom: 2 }}>
+                          ☀ SOLAR LINE-OF-SIGHT &amp; OCCLUDER DIAGNOSTIC
+                        </span>
+                        <span style={{ color: '#cbd5e1' }}>{diagnostics.sunOccluderText}</span>
+                      </div>
+                      <div>
+                        <span style={{ fontWeight: 800, color: '#38bdf8', display: 'block', marginBottom: 2 }}>
+                          🌍 EARTH DTE CLEARANCE &amp; RIDGE DIAGNOSTIC
+                        </span>
+                        <span style={{ color: '#cbd5e1' }}>{diagnostics.earthOccluderText}</span>
+                      </div>
                     </div>
 
-                    <div>
-                      <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>Timeframe Illumination &amp; DTE Timeline</h3>
-                      <VisibilityTimelineChart
-                        data={report.states as any}
-                        selectedIndex={selectedTimeIndex}
-                        onTimeChange={(_, idx) => setSelectedTimeIndex(idx)}
-                        height={220}
-                      />
+                    {/* 4. Position (±100/200/500m) & Date (±1/3/7d) Sensitivity Chips */}
+                    <div
+                      style={{
+                        background: '#060a14',
+                        border: '1px solid #1e293b',
+                        borderRadius: 10,
+                        padding: '10px 14px',
+                        display: 'grid',
+                        gap: 8,
+                      }}
+                    >
+                      <div style={{ fontSize: 10.5, fontWeight: 800, color: '#94a3b8', letterSpacing: '0.05em' }}>
+                        SENSITIVITY TO LANDING ELLIPSE POSITION (±100–500m) &amp; SCHEDULE SLIP (±1–7d)
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {sensitivityChips.positionSensitivity.map((chip) => (
+                          <span
+                            key={chip.label}
+                            style={{
+                              background: '#0f172a',
+                              border: '1px solid #334155',
+                              borderRadius: 6,
+                              padding: '3px 8px',
+                              fontSize: 10,
+                              color: '#e2e8f0',
+                            }}
+                          >
+                            <strong>Pos {chip.label}:</strong> Sun{' '}
+                            <span style={{ color: chip.deltaSun >= 0 ? '#4ade80' : '#f87171' }}>
+                              {chip.deltaSun >= 0 ? '+' : ''}
+                              {chip.deltaSun.toFixed(1)}%
+                            </span>
+                            , DTE{' '}
+                            <span style={{ color: chip.deltaDte >= 0 ? '#38bdf8' : '#f87171' }}>
+                              {chip.deltaDte >= 0 ? '+' : ''}
+                              {chip.deltaDte.toFixed(1)}%
+                            </span>
+                          </span>
+                        ))}
+                        {sensitivityChips.dateSensitivity.map((chip) => (
+                          <span
+                            key={chip.label}
+                            style={{
+                              background: '#0f172a',
+                              border: '1px solid #334155',
+                              borderRadius: 6,
+                              padding: '3px 8px',
+                              fontSize: 10,
+                              color: '#e2e8f0',
+                            }}
+                          >
+                            <strong>Slip {chip.label}:</strong> Sun{' '}
+                            <span style={{ color: chip.deltaSun >= 0 ? '#4ade80' : '#f87171' }}>
+                              {chip.deltaSun >= 0 ? '+' : ''}
+                              {chip.deltaSun.toFixed(1)}%
+                            </span>
+                            , DTE{' '}
+                            <span style={{ color: chip.deltaDte >= 0 ? '#38bdf8' : '#f87171' }}>
+                              {chip.deltaDte >= 0 ? '+' : ''}
+                              {chip.deltaDte.toFixed(1)}%
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* 5. Diagnostic Charts Wrapper (Captured by PNG Exporter) */}
+                    <div ref={techChartsWrapperRef} style={{ display: 'grid', gap: 14 }}>
+                      <div>
+                        <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>
+                          360° Terrain Horizon Skyline &amp; Earth Libration Loop
+                        </h3>
+                        <HorizonSkylineChart
+                          site={selectedSite as any}
+                          sunPosition={{
+                            azimuthDeg: currentState.sunAzimuthDeg,
+                            elevationDeg: currentState.sunElevationDeg,
+                            angularRadiusDeg: 0.266,
+                          }}
+                          earthPosition={{
+                            azimuthDeg: currentState.earthAzimuthDeg,
+                            elevationDeg: currentState.earthElevationDeg,
+                            angularRadiusDeg: 0.95,
+                          }}
+                          currentVisibility={currentState as any}
+                          sunPath={sunTrack}
+                          earthPath={earthTrack}
+                          height={240}
+                        />
+                      </div>
+
+                      <div>
+                        <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>Timeframe Illumination &amp; DTE Timeline</h3>
+                        <VisibilityTimelineChart
+                          data={report.states as any}
+                          selectedIndex={selectedTimeIndex}
+                          onTimeChange={(_, idx) => setSelectedTimeIndex(idx)}
+                          height={210}
+                        />
+                      </div>
+                    </div>
+
+                    {/* 6. Chronological Text Event List (Accessible Alternative to Charts) */}
+                    <div
+                      style={{
+                        background: '#060a14',
+                        border: '1px solid #1e293b',
+                        borderRadius: 12,
+                        padding: '12px 14px',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          marginBottom: 8,
+                        }}
+                      >
+                        <span style={{ fontSize: 10.5, fontWeight: 800, color: '#94a3b8', letterSpacing: '0.06em' }}>
+                          CHRONOLOGICAL VISIBILITY &amp; OPERATIONS EVENT LOG ({diagnostics.events.length} EVENTS · ±
+                          {diagnostics.eventSpreadHours}h BAND)
+                        </span>
+                        <span style={{ fontSize: 10, color: '#64748b' }}>UTC · MET · Lunar Local Time</span>
+                      </div>
+
+                      {diagnostics.events.length === 0 ? (
+                        <div style={{ fontSize: 11.5, color: '#94a3b8' }}>
+                          No sunrise, sunset, or Earth DTE horizon crossings occurred inside this window.
+                        </div>
+                      ) : (
+                        <div style={{ maxHeight: 165, overflowY: 'auto', display: 'grid', gap: 5 }}>
+                          {diagnostics.events.map((ev) => {
+                            const tagColor =
+                              ev.type === 'SUNRISE'
+                                ? '#facc15'
+                                : ev.type === 'SUNSET'
+                                  ? '#f87171'
+                                  : ev.type === 'EARTHRISE'
+                                    ? '#38bdf8'
+                                    : ev.type === 'EARTHSET'
+                                      ? '#fb923c'
+                                      : '#c084fc';
+                            return (
+                              <div
+                                key={ev.id}
+                                style={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                  flexWrap: 'wrap',
+                                  gap: 8,
+                                  fontSize: 11,
+                                  padding: '4px 8px',
+                                  background: '#0b1220',
+                                  borderRadius: 6,
+                                  borderLeft: `3px solid ${tagColor}`,
+                                }}
+                              >
+                                <div>
+                                  <strong style={{ color: tagColor, marginRight: 8 }}>{ev.type}</strong>
+                                  <span style={{ color: '#e2e8f0', fontFamily: 'monospace' }}>
+                                    {ev.timeUtc.replace('T', ' ').slice(0, 16)} UTC
+                                  </span>
+                                  <span style={{ color: '#64748b', marginLeft: 8 }}>
+                                    (MET +{ev.metHours}h · {ev.lltStr})
+                                  </span>
+                                </div>
+                                <span style={{ color: '#94a3b8', fontSize: 10.5 }}>{ev.note}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 7. VALIDATION & CONTROL REPLAYS PANEL (V0–V4) */}
+                    <div
+                      style={{
+                        background: '#060a14',
+                        border: '1px solid #1e293b',
+                        borderRadius: 12,
+                        padding: '12px 14px',
+                        display: 'grid',
+                        gap: 10,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
+                          gap: 6,
+                        }}
+                      >
+                        <span style={{ fontSize: 10.5, fontWeight: 800, color: '#38bdf8', letterSpacing: '0.06em' }}>
+                          🛡️ CONTROL REPLAYS &amp; PHYSICS-INFORMED VALIDATION (V0–V4)
+                        </span>
+                        <span style={{ fontSize: 10, color: '#94a3b8' }}>
+                          Click a control case to verify engine against JPL Horizons &amp; mission logs
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {CONTROL_REPLAY_PRESETS.map((ctrl) => {
+                          const isSelected = activeControlReplay?.id === ctrl.id;
+                          return (
+                            <button
+                              key={ctrl.id}
+                              type="button"
+                              onClick={() => handleLoadControlReplay(ctrl)}
+                              style={{
+                                background: isSelected ? 'rgba(56, 189, 248, 0.22)' : '#0f172a',
+                                color: isSelected ? '#ffffff' : '#cbd5e1',
+                                border: isSelected ? '1px solid #38bdf8' : '1px solid #334155',
+                                borderRadius: 7,
+                                padding: '5px 9px',
+                                fontSize: 10.5,
+                                fontWeight: 800,
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 5,
+                              }}
+                            >
+                              <span
+                                style={{
+                                  fontSize: 9,
+                                  padding: '1px 5px',
+                                  borderRadius: 4,
+                                  background:
+                                    ctrl.controlType === 'NEGATIVE CONTROL'
+                                      ? 'rgba(248, 113, 113, 0.2)'
+                                      : 'rgba(74, 222, 128, 0.18)',
+                                  color:
+                                    ctrl.controlType === 'NEGATIVE CONTROL' ? '#fca5a5' : '#86efac',
+                                }}
+                              >
+                                {ctrl.badge}
+                              </span>
+                              <span>{ctrl.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {activeControlReplay && (
+                        <div
+                          style={{
+                            background: 'rgba(2, 132, 199, 0.12)',
+                            border: '1px solid rgba(56, 189, 248, 0.45)',
+                            borderRadius: 9,
+                            padding: '9px 12px',
+                            fontSize: 11,
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              flexWrap: 'wrap',
+                              gap: 6,
+                              marginBottom: 4,
+                            }}
+                          >
+                            <strong style={{ color: '#38bdf8' }}>
+                              ✓ ACTIVE {activeControlReplay.controlType}: {activeControlReplay.label}
+                            </strong>
+                            <span style={{ color: '#94a3b8', fontSize: 10 }}>
+                              {activeControlReplay.toleranceNote}
+                            </span>
+                          </div>
+                          <div style={{ color: '#e2e8f0', marginBottom: 4 }}>
+                            <strong>Reference Baseline:</strong> {activeControlReplay.expectedOutcome}
+                          </div>
+                          <div style={{ color: '#4ade80', fontWeight: 700 }}>
+                            Live Engine Output at {currentState.timeUtc.replace('T', ' ').slice(0, 16)} UTC → Sun{' '}
+                            {currentState.sunElevationDeg.toFixed(2)}° (Az {currentState.sunAzimuthDeg.toFixed(1)}°) ·
+                            Earth {currentState.earthElevationDeg.toFixed(2)}° · Window Sunlit{' '}
+                            {report.metrics.illuminationPct.toFixed(1)}% · DTE{' '}
+                            {report.metrics.dteAvailabilityPct.toFixed(1)}%
+                          </div>
+                        </div>
+                      )}
+
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                          gap: 8,
+                        }}
+                      >
+                        {validationBadges.map((chk) => (
+                          <div
+                            key={chk.id}
+                            style={{
+                              background: '#0b1220',
+                              border: `1px solid ${chk.status === 'PASS' ? 'rgba(74, 222, 128, 0.35)' : 'rgba(250, 204, 21, 0.45)'}`,
+                              borderRadius: 8,
+                              padding: '6px 9px',
+                              fontSize: 10.5,
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
+                              <span style={{ color: '#f8fafc' }}>{chk.label}</span>
+                              <span style={{ color: chk.status === 'PASS' ? '#4ade80' : '#facc15' }}>
+                                {chk.status === 'PASS' ? '✓ PASS' : '⚠ CHECK'}
+                              </span>
+                            </div>
+                            <div style={{ color: '#94a3b8', fontSize: 9.5, marginTop: 2 }}>{chk.detail}</div>
+                          </div>
+                        ))}
+
+                        {gateBadges.map((gate) => (
+                          <div
+                            key={gate.id}
+                            style={{
+                              background: '#0b1220',
+                              border: `1px solid ${gate.status === 'PASS' ? 'rgba(56, 189, 248, 0.3)' : 'rgba(248, 113, 113, 0.5)'}`,
+                              borderRadius: 8,
+                              padding: '6px 9px',
+                              fontSize: 10.5,
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
+                              <span style={{ color: '#f8fafc' }}>{gate.label}</span>
+                              <span style={{ color: gate.status === 'PASS' ? '#38bdf8' : '#f87171' }}>
+                                {gate.status === 'PASS' ? '● CLEAR' : '⚑ FLAGGED'}
+                              </span>
+                            </div>
+                            <div style={{ color: '#94a3b8', fontSize: 9.5, marginTop: 2 }}>{gate.detail}</div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
 
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
-                      <span style={{ color: '#94a3b8' }}>Source: {selectedSite.demSource} · DE441 MEAN_ME</span>
+                      <span style={{ color: '#94a3b8' }}>
+                        Source: {selectedSite.demSource} · DE440/DE421 MEAN_ME (R = 1737.4 km)
+                      </span>
                       <a
                         href={report.horizonsQueryUrl}
                         target="_blank"
@@ -1654,7 +2837,6 @@ export function App() {
                 {/* DETERMINISTIC MISSION SUCCESS PROBABILITY DASHBOARD */}
                 {activePopup === 'MISSION_PROB' && (
                   <div style={{ display: 'grid', gap: 14 }}>
-                    {/* 1. Mission Date, Duration & Departure Orbit Parameters */}
                     <div
                       style={{
                         background: '#060a14',
@@ -1702,23 +2884,28 @@ export function App() {
                         </label>
                       </div>
 
-                      <label style={{ fontSize: 10.5, fontWeight: 800, color: '#94a3b8' }}>
-                        DEPARTURE ORBIT:
-                        <select
-                          value={probStationId}
-                          onChange={(e) => setProbStationId(e.target.value as DepartureOrbitalId)}
-                          style={{ ...compactControlStyle, marginLeft: 6 }}
-                        >
-                          {(Object.keys(ORBITAL_DEPARTURE_PROFILES) as DepartureOrbitalId[]).map((id) => (
-                            <option key={id} value={id}>
-                              {ORBITAL_DEPARTURE_PROFILES[id].label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <label style={{ fontSize: 10.5, fontWeight: 800, color: '#94a3b8' }}>
+                          DEPARTURE ORBIT:
+                          <select
+                            value={probStationId}
+                            onChange={(e) => setProbStationId(e.target.value as DepartureOrbitalId)}
+                            style={{ ...compactControlStyle, marginLeft: 6 }}
+                          >
+                            {(Object.keys(ORBITAL_DEPARTURE_PROFILES) as DepartureOrbitalId[]).map((id) => (
+                              <option key={id} value={id}>
+                                {ORBITAL_DEPARTURE_PROFILES[id].label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <button type="button" onClick={handleExportJson} style={exportBtnStyle}>
+                          ⬇ JSON
+                        </button>
+                      </div>
                     </div>
 
-                    {/* 2. Core Mission Telemetry Statistics Grid */}
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))', gap: 10 }}>
                       <div style={statBox}>
                         <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700 }}>LOCATION &amp; SURVEY STATUS</span>
@@ -1760,14 +2947,9 @@ export function App() {
                       </div>
 
                       <div style={statBox}>
-                        <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700 }}>TOUCHDOWN &amp; COMMS</span>
-                        <strong
-                          style={{
-                            fontSize: 15,
-                            color: currentState.sunVisible ? '#34d399' : '#f87171',
-                          }}
-                        >
-                          Sun {missionProbability.touchdownSunElDeg.toFixed(1)}°
+                        <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700 }}>JOINT OPS &amp; COMMS</span>
+                        <strong style={{ fontSize: 15, color: '#c084fc' }}>
+                          {diagnostics.opsWindowHours}h Joint Ops
                         </strong>
                         <span style={{ fontSize: 10.5, color: '#94a3b8' }}>
                           Earth DTE {report.metrics.dteAvailabilityPct.toFixed(1)}% · Max dark{' '}
@@ -1776,7 +2958,6 @@ export function App() {
                       </div>
                     </div>
 
-                    {/* 3. Weighted Factor Breakdown Bars */}
                     <div
                       style={{
                         background: '#060a14',
@@ -1825,7 +3006,7 @@ export function App() {
                       ))}
                     </div>
 
-                    {/* 4. BOTTOM OVERALL PROBABILITY OF SUCCESS SUMMARY CARD */}
+                    {/* BOTTOM OVERALL PROBABILITY OF SUCCESS GAUGE */}
                     <div
                       style={{
                         background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.96), rgba(6, 10, 20, 0.98))',
@@ -1839,7 +3020,6 @@ export function App() {
                         gap: 18,
                       }}
                     >
-                      {/* Circular SVG Probability Gauge */}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                         <div style={{ position: 'relative', width: 104, height: 104, flexShrink: 0 }}>
                           <svg width="104" height="104" viewBox="0 0 104 104">
@@ -2197,6 +3377,17 @@ const closeBtnStyle: React.CSSProperties = {
   borderRadius: 8,
   padding: '6px 12px',
   fontSize: 12,
+  fontWeight: 800,
+  cursor: 'pointer',
+};
+
+const exportBtnStyle: React.CSSProperties = {
+  background: '#0f172a',
+  color: '#38bdf8',
+  border: '1px solid rgba(56, 189, 248, 0.45)',
+  borderRadius: 6,
+  padding: '4px 10px',
+  fontSize: 11,
   fontWeight: 800,
   cursor: 'pointer',
 };

@@ -1,5 +1,4 @@
-export type MissionProgram = 'ARTEMIS' | 'APOLLO' | 'CLPS' | 'INTERNATIONAL' | 'CSA';
-
+export type MissionProgram = 'ARTEMIS' | 'APOLLO' | 'CLPS' | 'CSA' | 'INTERNATIONAL' | 'CUSTOM';
 export interface CuratedLunarSite {
   siteId: string;
   name: string;
