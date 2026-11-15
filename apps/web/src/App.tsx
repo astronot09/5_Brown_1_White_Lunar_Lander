@@ -26,6 +26,8 @@ type ActivePopup = 'NONE' | 'SITES' | 'TECH_GRAPHS' | 'MISSION_PROB';
 type DepartureOrbitalId = 'ISS' | 'TIANGONG' | 'HLS_DEPOT' | 'GATEWAY';
 
 const LUNAR_RADIUS_KM = 1737.4;
+const PROJECT_REPORT_URL =
+  'https://drive.google.com/file/d/1hX6kxKc9y9QbYj1na9itALI7PeNn_tqs/view?usp=sharing';
 
 const TABLE_13_REFERENCE_SITES: {
   siteId: string;
@@ -1011,8 +1013,9 @@ function HomeLandingView({
               </button>
 
               <a
-                href="/SkyofSelenaReport.pdf"
-                download="SkyofSelenaReport.pdf"
+                href={PROJECT_REPORT_URL}
+                target="_blank"
+                rel="noopener noreferrer"
                 style={{
                   ...heroOutlineBtnStyle,
                   textDecoration: 'none',
@@ -1423,8 +1426,9 @@ function HomeLandingView({
               🚀 Start Lander Simulation
             </button>
             <a
-              href="/SkyofSelenaReport.pdf"
-              download="SkyofSelenaReport.pdf"
+              href={PROJECT_REPORT_URL}
+              target="_blank"
+              rel="noopener noreferrer"
               style={{
                 background: '#0f172a',
                 color: '#7dd3fc',
