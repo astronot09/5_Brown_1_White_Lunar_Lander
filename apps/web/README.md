@@ -1,28 +1,12 @@
-# Lunar Skyline (`5_Brown_1_White_Lunar_Lander`)
+# Lunar Skyline web application
 
-**NASA Space Apps Challenge 2026 — Lunar Landing Site Navigator**
+This folder contains the React + TypeScript + Vite frontend. The repository-level [README](../../README.md) explains prerequisites, installation, development, build, preview and test commands.
 
-A physics-informed, static-first pipeline for terrain-aware Sun and Earth visibility analysis at lunar landing sites with rigorous control validation.
+To work directly in this folder:
 
----
+```bash
+npm ci
+npm run dev
+```
 
-## Architecture & Repository Layout
-
-```text
-5_Brown_1_White_Lunar_Lander/
-├── pipeline/                 # Python 3.11+ offline SPICE & LOLA DEM ray-casting pipeline
-│   ├── download_data.py      # Fetches NAIF SPICE kernels & JPL Horizons DE441 baselines
-│   ├── generate_horizon.py   # 360° terrain ray-caster outputting SiteHorizonProfile JSONs
-│   ├── update_manifest.py    # Generates SHA-256 checksums for data/manifest.json
-│   └── tests/                # Pytest suite verifying schemas and manifest integrity
-├── packages/
-│   └── lunar-core/           # TypeScript browser engine (transforms, visibility, events, gates)
-├── apps/
-│   └── web/                  # React + Vite + OpenLayers + D3 dashboard & educational games
-│       └── public/data/sites/# Pre-computed landing site horizon profiles & index.json
-├── data/
-│   ├── kernels/              # NAIF SPICE kernels (gitignored, SHA-256 tracked)
-│   ├── dem/                  # PGDA Product 90 & Product 78 LOLA DEM tiles (gitignored)
-│   ├── horizons-ref/         # Cached JPL Horizons DE441 baselines for offline CI
-│   └── manifest.json         # SHA-256 checksums for all inputs & derived artefacts
-└── docs/                     # DATA.md, METHODOLOGY.md, VALIDATION.md, LIMITATIONS.md, AI-USE.md
+The application currently uses static site profiles from `public/data/sites/`; it does not require a backend service or environment variables.

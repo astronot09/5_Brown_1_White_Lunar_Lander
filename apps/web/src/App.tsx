@@ -15,9 +15,9 @@ import LunarSurvivalGame from './components/games/LunarSurvivalGame';
 import { LunarSiteMap, useLunarSites, type LunarSite, type VisibilityState } from './components/map';
 
 /**
- * Generates a realistic 29.5-day (708-hour) Moon-centered MEAN_ME ephemeris
- * series for the Lunar South Pole so the browser engine computes full synodic
- * illumination and Earth libration cycles without needing external servers.
+ * Generates an illustrative 29.5-day periodic demonstration series.
+ * These synthetic vectors are not produced by SPICE or JPL Horizons and must
+ * not be treated as DE441 or light-time/stellar-aberration validated data.
  */
 function buildSynodicSamples(startIso: string, hours = 708, stepHours = 3): EphemerisVectorSample[] {
   const startMs = Date.parse(startIso);
@@ -120,8 +120,8 @@ function createEarthTexture(): THREE.CanvasTexture {
 }
 
 /**
- * Interactive 3D Lunar Crater Basin, Artemis Lander, Sun & Textured Earth Globe
- * sculpted from the site's 360-degree LOLA horizon elevation mask.
+ * Procedural 3D crater-basin illustration driven by the site's horizon profile.
+ * It is not a measured elevation mesh or a LOLA-derived digital elevation model.
  */
 function Terrain3DViewport({
   site,
@@ -696,7 +696,7 @@ function Terrain3DViewport({
             ? 'Drag left/right to pan 360° horizon skyline from lander deck'
             : 'Drag to orbit crater basin · Scroll to zoom · Real-time ridge shadow casting'}
         </span>
-        <span>3D LOLA Horizon DEM</span>
+        <span>Procedural horizon relief</span>
       </div>
     </div>
   );
@@ -925,8 +925,11 @@ export function App() {
             <span style={{ background: '#0284c7', color: '#fff', fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 4, letterSpacing: '0.06em' }}>
               ARTEMIS SOUTH POLE
             </span>
-            <span style={{ background: '#065f46', color: '#6ee7b7', fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 4 }}>
-              DE441 GATE &lt; 0.05°
+            <span
+              title="Periodic illustrative inputs; not generated from SPICE or Horizons and not DE441-validated."
+              style={{ background: '#334155', color: '#e2e8f0', fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 4 }}
+            >
+              SYNTHETIC MODEL
             </span>
           </div>
           <h1 style={{ margin: '6px 0 0', fontSize: 22, fontWeight: 700, letterSpacing: '-0.02em' }}>
@@ -1048,7 +1051,7 @@ export function App() {
           <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
               <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>3D Horizon Rim &amp; Solar Illumination Geometry</h2>
-              <span style={{ fontSize: 11, color: '#94a3b8' }}>{selectedSite.demSource ?? 'LOLA DEM'}</span>
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>{selectedSite.demSource ?? 'Horizon source unavailable'}</span>
             </div>
             <Terrain3DViewport
               site={selectedSite}
