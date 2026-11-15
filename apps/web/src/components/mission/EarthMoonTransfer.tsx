@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import type { EarthMoonTransferPlan } from '../../lib/orbit';
-import { lunarCoordinatesToUnitVector } from '../../../../../packages/lunar-core/src/lunarCoordinates';
 
 interface EarthMoonTransferProps {
   plan: EarthMoonTransferPlan;
@@ -186,14 +185,13 @@ export function EarthMoonTransfer({ plan, destinationName, latitudeDeg, longitud
     moonGroup.position.set(-moonOrbitRadius, 0, 0);
     const moon = new THREE.Mesh(new THREE.SphereGeometry(0.2, 48, 48), moonMaterial);
     moonGroup.add(moon);
-    const destinationVector = lunarCoordinatesToUnitVector({
-      latDeg: latitudeDeg,
-      lonDeg: longitudeDeg,
-    });
+    const latitudeRad = THREE.MathUtils.degToRad(latitudeDeg);
+    const longitudeRad = THREE.MathUtils.degToRad(longitudeDeg);
+    const cosLatitude = Math.cos(latitudeRad);
     const destinationNormal = new THREE.Vector3(
-      destinationVector.x,
-      destinationVector.y,
-      destinationVector.z,
+      cosLatitude * Math.cos(longitudeRad),
+      Math.sin(latitudeRad),
+      -cosLatitude * Math.sin(longitudeRad),
     );
     const destinationMarker = new THREE.Mesh(
       new THREE.SphereGeometry(0.025, 16, 16),

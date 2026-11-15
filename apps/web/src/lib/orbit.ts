@@ -1,6 +1,11 @@
-/** UI date-input helpers plus exports from the reusable preliminary transfer model. */
-export { calculateEarthMoonTransfer, ORBIT_ASSUMPTIONS } from '../../../../packages/lunar-core/src/orbit';
-export type { EarthMoonTransferPlan, TransferBurn } from '../../../../packages/lunar-core/src/orbit';
+export interface EarthMoonTransferPlan {
+  arrivalTimeUtc: string;
+  nominalLaunchTimeUtc: string;
+  phaseAngleAtDepartureDeg: number;
+  transferTimeDays: number;
+  tliDeltaVKmS: number;
+  loiDeltaVKmS: number;
+}
 
 /** Convert a local datetime-local input value into a Date. */
 export function parseLocalDateTime(value: string): Date {
