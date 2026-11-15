@@ -22,239 +22,54 @@ import {
 
 type ActivePopup = 'NONE' | 'SITES' | 'TECH_GRAPHS' | 'AI_HOOK' | 'LANDER_SIM';
 
-interface LiveLanderTelemetry {
-  altitudeM?: number;
-  verticalSpeedMs?: number;
-  horizontalSpeedMs?: number;
-  fuelPct?: number;
-  tiltDeg?: number;
-  status?: 'ready' | 'playing' | 'landed' | 'crashed';
-  activeWarning?: string;
-}
-
-/**
- * Floating humanoid EVA companion ("LUNA") that hovers beside the simulator
- * without obstructing gameplay controls or telemetry gauges.
- */
-function LunaHoverCompanion({
-  site,
-  sunVisible,
-  earthVisible,
-  liveTelemetry,
+function EdgeHoverActionButton({
+  side,
+  icon,
+  label,
+  active,
+  borderColor,
+  onClick,
 }: {
-  site: CuratedLunarSite;
-  sunVisible: boolean;
-  earthVisible: boolean;
-  liveTelemetry: LiveLanderTelemetry | null;
+  side: 'left' | 'right';
+  icon: string;
+  label: string;
+  active: boolean;
+  borderColor: string;
+  onClick: () => void;
 }) {
-  const [minimized, setMinimized] = useState(false);
-  const [blink, setBlink] = useState(false);
-
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      setBlink(true);
-      window.setTimeout(() => setBlink(false), 160);
-    }, 3800);
-    return () => window.clearInterval(id);
-  }, []);
-
-  const guidance = useMemo(() => {
-    const slope = site.slopeDeg ?? 0;
-
-    if (liveTelemetry?.activeWarning) {
-      return {
-        level: 'CRITICAL' as const,
-        title: 'ACTIVE FLIGHT ALERT',
-        message: liveTelemetry.activeWarning,
-      };
-    }
-
-    if (liveTelemetry?.status === 'playing') {
-      const vy = Math.abs(liveTelemetry.verticalSpeedMs ?? 0);
-      const fuel = liveTelemetry.fuelPct ?? 100;
-      if (vy > 4.2) {
-        return {
-          level: 'CRITICAL' as const,
-          title: 'HIGH DESCENT RATE',
-          message: `Sink rate ${vy.toFixed(1)} m/s exceeds strut limit. Increase main throttle now.`,
-        };
-      }
-      if (fuel < 22) {
-        return {
-          level: 'CAUTION' as const,
-          title: 'LOW PROPELLANT MARGIN',
-          message: `Propellant at ${fuel}%. Avoid hovering and commit smoothly to the pad.`,
-        };
-      }
-    }
-
-    if (!sunVisible) {
-      return {
-        level: 'CAUTION' as const,
-        title: 'LOW-LIGHT TERRAIN',
-        message: `${site.name} is currently in shadow (${slope.toFixed(1)}° slope). Keep your landing spotlight active.`,
-      };
-    }
-
-    if (!earthVisible) {
-      return {
-        level: 'CAUTION' as const,
-        title: 'DTE OCCULTATION',
-        message: `Direct-to-Earth link is blocked by lunar terrain at ${site.name}. Rely on onboard inertial guidance.`,
-      };
-    }
-
-    return {
-      level: 'NOMINAL' as const,
-      title: 'LUNA // FLIGHT DIRECTOR',
-      message: `Target ${site.name} locked (${slope.toFixed(1)}° terrain slope). Keep sink rate under 4.2 m/s and deploy gear before touchdown.`,
-    };
-  }, [site, sunVisible, earthVisible, liveTelemetry]);
-
-  const accentColor =
-    guidance.level === 'CRITICAL'
-      ? '#f87171'
-      : guidance.level === 'CAUTION'
-        ? '#facc15'
-        : '#38bdf8';
+  const [hovered, setHovered] = useState(false);
 
   return (
-    <aside
-      aria-label="LUNA Flight Companion"
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      title={label}
       style={{
-        position: 'fixed',
-        right: 20,
-        bottom: 22,
-        zIndex: 60,
+        background: active ? 'rgba(2, 132, 199, 0.94)' : 'rgba(15, 23, 42, 0.88)',
+        backdropFilter: 'blur(10px)',
+        color: '#f8fafc',
+        border: `1px solid ${active ? '#fff' : borderColor}`,
+        borderLeft: side === 'left' ? 'none' : `1px solid ${active ? '#fff' : borderColor}`,
+        borderRight: side === 'right' ? 'none' : `1px solid ${active ? '#fff' : borderColor}`,
+        borderRadius: side === 'left' ? '0 12px 12px 0' : '12px 0 0 12px',
+        padding: hovered ? '9px 14px' : '9px 10px',
         display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'flex-end',
-        gap: 10,
-        pointerEvents: 'none',
-        animation: 'lunaZeroGFloat 4.6s ease-in-out infinite',
+        flexDirection: side === 'left' ? 'row' : 'row-reverse',
+        alignItems: 'center',
+        gap: hovered ? 8 : 0,
+        fontSize: 11,
+        fontWeight: 800,
+        cursor: 'pointer',
+        boxShadow: '0 6px 20px rgba(0, 0, 0, 0.55)',
+        whiteSpace: 'nowrap',
+        transition: 'padding 160ms ease, background 160ms ease',
       }}
     >
-      {/* Speech / Telemetry Callout Bubble */}
-      {!minimized && (
-        <div
-          style={{
-            pointerEvents: 'auto',
-            width: 268,
-            background: 'rgba(9, 15, 29, 0.94)',
-            backdropFilter: 'blur(12px)',
-            border: `1px solid ${accentColor}`,
-            borderRadius: 14,
-            padding: '11px 13px',
-            boxShadow: '0 14px 34px rgba(0, 0, 0, 0.72)',
-            color: '#f8fafc',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: 5,
-            }}
-          >
-            <span
-              style={{
-                fontSize: 10,
-                fontWeight: 800,
-                letterSpacing: '0.07em',
-                color: accentColor,
-              }}
-            >
-              ● {guidance.title}
-            </span>
-            <button
-              type="button"
-              onClick={() => setMinimized(true)}
-              title="Minimize LUNA callout"
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: '#94a3b8',
-                fontSize: 12,
-                fontWeight: 800,
-                cursor: 'pointer',
-                padding: '0 4px',
-              }}
-            >
-              —
-            </button>
-          </div>
-          <p style={{ margin: 0, fontSize: 11.5, lineHeight: 1.45, color: '#cbd5e1' }}>
-            {guidance.message}
-          </p>
-        </div>
-      )}
-
-      {/* Hovering Humanoid Astronaut / AI Figure */}
-      <button
-        type="button"
-        onClick={() => setMinimized((m) => !m)}
-        title={minimized ? 'Expand LUNA Flight Assistant' : 'Click to toggle LUNA callout'}
-        style={{
-          pointerEvents: 'auto',
-          background: 'radial-gradient(circle at 50% 45%, rgba(56, 189, 248, 0.2), rgba(9, 15, 29, 0.92) 72%)',
-          border: `1.5px solid ${accentColor}`,
-          borderRadius: 999,
-          width: 96,
-          height: 114,
-          padding: 4,
-          cursor: 'pointer',
-          boxShadow: `0 10px 28px rgba(0,0,0,0.75), 0 0 18px ${accentColor}33`,
-          display: 'grid',
-          placeItems: 'center',
-        }}
-      >
-        <svg width="78" height="98" viewBox="0 0 90 112" fill="none">
-          {/* RCS Backpack */}
-          <rect x="24" y="42" width="42" height="30" rx="8" fill="#1e293b" stroke="#475569" strokeWidth="1.5" />
-          {/* Thruster Glow */}
-          <ellipse cx="33" cy="75" rx="4" ry="6" fill={accentColor} opacity="0.55" />
-          <ellipse cx="57" cy="75" rx="4" ry="6" fill={accentColor} opacity="0.55" />
-
-          {/* Antenna */}
-          <line x1="45" y1="6" x2="45" y2="15" stroke={accentColor} strokeWidth="2" strokeLinecap="round" />
-          <circle cx="45" cy="5" r="3" fill={accentColor} />
-
-          {/* Astronaut Helmet */}
-          <rect x="25" y="14" width="40" height="32" rx="15" fill="#f8fafc" stroke="#94a3b8" strokeWidth="1.5" />
-          {/* Visor */}
-          <rect x="30" y="20" width="30" height="19" rx="9" fill="#060a14" stroke={accentColor} strokeWidth="1.4" />
-          {/* Expressive Eyes */}
-          {blink ? (
-            <>
-              <line x1="36" y1="29" x2="42" y2="29" stroke={accentColor} strokeWidth="2" strokeLinecap="round" />
-              <line x1="48" y1="29" x2="54" y2="29" stroke={accentColor} strokeWidth="2" strokeLinecap="round" />
-            </>
-          ) : (
-            <>
-              <circle cx="39" cy="29" r="2.6" fill={accentColor} />
-              <circle cx="51" cy="29" r="2.6" fill={accentColor} />
-            </>
-          )}
-
-          {/* Torso Suit */}
-          <rect x="28" y="47" width="34" height="28" rx="10" fill="#e2e8f0" stroke="#94a3b8" strokeWidth="1.5" />
-          {/* Chest Telemetry Core */}
-          <rect x="37" y="54" width="16" height="10" rx="3" fill="#0f172a" stroke={accentColor} strokeWidth="1.2" />
-          <circle cx="45" cy="59" r="2.3" fill={accentColor} />
-
-          {/* Floating Arms */}
-          <path d="M27 52 C17 56, 15 66, 21 71" stroke="#e2e8f0" strokeWidth="6" strokeLinecap="round" />
-          <path d="M63 52 C73 56, 75 66, 69 71" stroke="#e2e8f0" strokeWidth="6" strokeLinecap="round" />
-
-          {/* Zero-G Boots */}
-          <path d="M36 75 L33 93" stroke="#cbd5e1" strokeWidth="6.5" strokeLinecap="round" />
-          <path d="M54 75 L57 93" stroke="#cbd5e1" strokeWidth="6.5" strokeLinecap="round" />
-          <rect x="27" y="91" width="11" height="5" rx="2.5" fill="#334155" />
-          <rect x="52" y="91" width="11" height="5" rx="2.5" fill="#334155" />
-        </svg>
-      </button>
-    </aside>
+      <span style={{ fontSize: 16, lineHeight: 1 }}>{icon}</span>
+      {hovered && <span>{label}</span>}
+    </button>
   );
 }
 
@@ -263,26 +78,21 @@ export function App() {
   const [selectedSiteId, setSelectedSiteId] = useState('shackleton_rim_01');
   const [programFilter, setProgramFilter] = useState<'ALL' | MissionProgram>('ALL');
 
-  // Centerpiece Perspective: 3D Globe | 360° Surface Street View | Earth-Moon Orbit
   const [perspective, setPerspective] = useState<MapPerspective>('GLOBE');
 
-  // Timeframe & Slider State
   const [missionStartIso, setMissionStartIso] = useState('2026-11-14T00:00:00Z');
   const [windowDays, setWindowDays] = useState(29.53);
   const [selectedTimeIndex, setSelectedTimeIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
 
-  // Popup & Split-Screen States
   const [activePopup, setActivePopup] = useState<ActivePopup>('NONE');
   const [splitScreenOpen, setSplitScreenOpen] = useState(false);
 
-  // Custom Coordinate Inputs & Horizons status
   const [customLat, setCustomLat] = useState('-88.50');
   const [customLon, setCustomLon] = useState('45.00');
   const [mastHeightM, setMastHeightM] = useState(2);
   const [panelPreset, setPanelPreset] = useState<PanelPreset>('VERTICAL_TRACKING');
   const [horizonsSyncStatus, setHorizonsSyncStatus] = useState<string>('');
-  const [liveLanderTelemetry, setLiveLanderTelemetry] = useState<LiveLanderTelemetry | null>(null);
 
   const selectedSite = useMemo(
     () => allSites.find((s) => s.siteId === selectedSiteId) ?? allSites[0]!,
@@ -309,16 +119,6 @@ export function App() {
     return () => window.clearInterval(id);
   }, [isPlaying, report.states.length]);
 
-  // Optional listener if LunarSurvivalGame dispatches live telemetry events
-  useEffect(() => {
-    const onSimTelemetry = (e: Event) => {
-      const detail = (e as CustomEvent<LiveLanderTelemetry>).detail;
-      if (detail) setLiveLanderTelemetry(detail);
-    };
-    window.addEventListener('luna-sim-telemetry', onSimTelemetry);
-    return () => window.removeEventListener('luna-sim-telemetry', onSimTelemetry);
-  }, []);
-
   const currentState =
     report.states[Math.min(selectedTimeIndex, Math.max(0, report.states.length - 1))] ?? report.states[0]!;
 
@@ -327,7 +127,6 @@ export function App() {
     [report.states, selectedTimeIndex, stepHours],
   );
 
-  // Expose verified deterministic telemetry payload on window for AI API integration
   useEffect(() => {
     (window as any).__LUNAR_AI_CONTEXT__ = {
       dataSource: 'DE441 MEAN_ME Analytical Ephemeris + LOLA DEM Horizon Mask (Zero Refraction)',
@@ -403,13 +202,6 @@ export function App() {
 
   return (
     <div style={appShellStyle}>
-      <style>{`
-        @keyframes lunaZeroGFloat {
-          0%, 100% { transform: translateY(0px); }
-          50% { transform: translateY(-9px); }
-        }
-      `}</style>
-
       {/* CENTERPIECE: FULL-VIEWPORT 3D MOON / STREET VIEW / ORBITAL SYSTEM */}
       <div style={{ position: 'absolute', inset: 0, zIndex: 1 }}>
         <LunarSiteMap
@@ -455,7 +247,6 @@ export function App() {
                 fontSize: 11,
                 fontWeight: 800,
                 cursor: 'pointer',
-                transition: 'background 150ms ease',
               }}
             >
               {tab.label}
@@ -464,55 +255,55 @@ export function App() {
         </nav>
       </header>
 
-      {/* LEFT FLOATING ACTION DOCK */}
+      {/* LEFT EDGE HOVER TABS (Never covers the Moon or ISS Station HUD) */}
       <aside style={leftDockStyle}>
-        <button
-          type="button"
+        <EdgeHoverActionButton
+          side="left"
+          icon="📍"
+          label="Sites & Custom Pin"
+          active={activePopup === 'SITES'}
+          borderColor="#38bdf8"
           onClick={() => setActivePopup(activePopup === 'SITES' ? 'NONE' : 'SITES')}
-          style={floatingBtnStyle(activePopup === 'SITES', '#38bdf8')}
-        >
-          <span style={{ fontSize: 18 }}>📍</span>
-          <span>Sites &amp; Custom Pin</span>
-        </button>
+        />
 
-        <button
-          type="button"
+        <EdgeHoverActionButton
+          side="left"
+          icon="📊"
+          label="Technical Graphs"
+          active={activePopup === 'TECH_GRAPHS'}
+          borderColor="#34d399"
           onClick={() => setActivePopup(activePopup === 'TECH_GRAPHS' ? 'NONE' : 'TECH_GRAPHS')}
-          style={floatingBtnStyle(activePopup === 'TECH_GRAPHS', '#34d399')}
-        >
-          <span style={{ fontSize: 18 }}>📊</span>
-          <span>Technical Graphs</span>
-        </button>
+        />
       </aside>
 
-      {/* RIGHT FLOATING ACTION DOCK */}
+      {/* RIGHT EDGE HOVER TABS */}
       <aside style={rightDockStyle}>
-        <button
-          type="button"
+        <EdgeHoverActionButton
+          side="right"
+          icon="⚖️"
+          label="Split-Screen Compare"
+          active={splitScreenOpen}
+          borderColor="#facc15"
           onClick={() => setSplitScreenOpen(true)}
-          style={floatingBtnStyle(splitScreenOpen, '#facc15')}
-        >
-          <span style={{ fontSize: 18 }}>⚖️</span>
-          <span>Split-Screen Compare</span>
-        </button>
+        />
 
-        <button
-          type="button"
+        <EdgeHoverActionButton
+          side="right"
+          icon="🤖"
+          label="AI Analyst Hook"
+          active={activePopup === 'AI_HOOK'}
+          borderColor="#c084fc"
           onClick={() => setActivePopup(activePopup === 'AI_HOOK' ? 'NONE' : 'AI_HOOK')}
-          style={floatingBtnStyle(activePopup === 'AI_HOOK', '#c084fc')}
-        >
-          <span style={{ fontSize: 18 }}>🤖</span>
-          <span>AI Analyst Hook</span>
-        </button>
+        />
 
-        <button
-          type="button"
+        <EdgeHoverActionButton
+          side="right"
+          icon="🚀"
+          label="Lander Descent Sim"
+          active={activePopup === 'LANDER_SIM'}
+          borderColor="#f97316"
           onClick={() => setActivePopup(activePopup === 'LANDER_SIM' ? 'NONE' : 'LANDER_SIM')}
-          style={floatingBtnStyle(activePopup === 'LANDER_SIM', '#f97316')}
-        >
-          <span style={{ fontSize: 18 }}>🚀</span>
-          <span>Lander Descent Sim</span>
-        </button>
+        />
       </aside>
 
       {/* BOTTOM TIMEFRAME & ORBITAL SLIDER DOCK */}
@@ -613,17 +404,17 @@ export function App() {
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              width: isLanderModal ? 'min(96vw, 1340px)' : 'min(94vw, 980px)',
-              maxHeight: isLanderModal ? '92vh' : '86vh',
+              width: isLanderModal ? 'min(96vw, 1360px)' : 'min(92vw, 820px)',
+              maxHeight: isLanderModal ? '92vh' : '84vh',
               overflowY: 'auto',
               background: '#0b1220',
               border: '1px solid #334155',
               borderRadius: 18,
-              padding: isLanderModal ? '16px 20px' : 20,
+              padding: isLanderModal ? '16px 20px' : 18,
               boxShadow: '0 24px 60px rgba(0, 0, 0, 0.85)',
+              textAlign: 'left',
             }}
           >
-            {/* Modal Top Bar */}
             <div
               style={{
                 display: 'flex',
@@ -667,8 +458,8 @@ export function App() {
             </div>
 
             {activePopup === 'SITES' && (
-              <div style={{ display: 'grid', gap: 16 }}>
-                <div style={{ background: '#060a14', border: '1px solid #1e293b', borderRadius: 12, padding: 14 }}>
+              <div style={{ display: 'grid', gap: 14 }}>
+                <div style={{ background: '#060a14', border: '1px solid #1e293b', borderRadius: 12, padding: 12 }}>
                   <div style={{ fontSize: 11, fontWeight: 800, color: '#38bdf8', marginBottom: 8 }}>
                     CUSTOM LUNAR COORDINATES (MEAN_ME FRAME)
                   </div>
@@ -732,7 +523,7 @@ export function App() {
                   ))}
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 10 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 10 }}>
                   {filteredSites.map((s) => (
                     <button
                       key={s.siteId}
@@ -746,14 +537,14 @@ export function App() {
                         background: s.siteId === selectedSite.siteId ? 'rgba(56, 189, 248, 0.16)' : '#060a14',
                         border: s.siteId === selectedSite.siteId ? '1px solid #38bdf8' : '1px solid #1e293b',
                         borderRadius: 10,
-                        padding: 12,
+                        padding: 10,
                         color: '#f8fafc',
                         cursor: 'pointer',
                       }}
                     >
                       <div style={{ fontSize: 10, fontWeight: 800, color: '#38bdf8' }}>{s.program}</div>
-                      <div style={{ fontSize: 13, fontWeight: 800, marginTop: 2 }}>{s.name}</div>
-                      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 3 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 800, marginTop: 2 }}>{s.name}</div>
+                      <div style={{ fontSize: 10.5, color: '#94a3b8', marginTop: 3 }}>
                         {s.coordinates.latDeg.toFixed(2)}°, {s.coordinates.lonDeg.toFixed(2)}°E · Alt {s.coordinates.elevationM}m
                       </div>
                     </button>
@@ -764,7 +555,6 @@ export function App() {
 
             {activePopup === 'TECH_GRAPHS' && (
               <div style={{ display: 'grid', gap: 16 }}>
-                {/* Solar Array & Mast Configuration Bar */}
                 <div
                   style={{
                     display: 'flex',
@@ -815,7 +605,7 @@ export function App() {
                   </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
                   <div style={statBox}>
                     <span style={{ fontSize: 10, color: '#94a3b8' }}>SUNLIT DURATION</span>
                     <strong style={{ fontSize: 18, color: '#facc15' }}>{report.metrics.illuminationPct.toFixed(1)}%</strong>
@@ -853,7 +643,7 @@ export function App() {
                     currentVisibility={currentState as any}
                     sunPath={sunTrack}
                     earthPath={earthTrack}
-                    height={260}
+                    height={250}
                   />
                 </div>
 
@@ -863,7 +653,7 @@ export function App() {
                     data={report.states as any}
                     selectedIndex={selectedTimeIndex}
                     onTimeChange={(_, idx) => setSelectedTimeIndex(idx)}
-                    height={230}
+                    height={220}
                   />
                 </div>
 
@@ -911,18 +701,6 @@ export function App() {
 
             {isLanderModal && <LunarSurvivalGame />}
           </div>
-
-          {/* Hovering Humanoid LUNA Companion Floating Around the Game Stage */}
-          {isLanderModal && (
-            <div onClick={(e) => e.stopPropagation()}>
-              <LunaHoverCompanion
-                site={selectedSite}
-                sunVisible={currentState.sunVisible}
-                earthVisible={currentState.earthVisible}
-                liveTelemetry={liveLanderTelemetry}
-              />
-            </div>
-          )}
         </div>
       )}
 
@@ -947,6 +725,7 @@ const appShellStyle: React.CSSProperties = {
   background: '#03050a',
   color: '#f8fafc',
   fontFamily: 'Inter, system-ui, sans-serif',
+  textAlign: 'left',
 };
 
 const topHeaderContainerStyle: React.CSSProperties = {
@@ -992,24 +771,26 @@ const perspectiveSwitchStyle: React.CSSProperties = {
 
 const leftDockStyle: React.CSSProperties = {
   position: 'absolute',
-  left: 18,
-  top: '50%',
+  left: 0,
+  top: '44%',
   transform: 'translateY(-50%)',
-  zIndex: 15,
+  zIndex: 20,
   display: 'flex',
   flexDirection: 'column',
-  gap: 12,
+  alignItems: 'flex-start',
+  gap: 10,
 };
 
 const rightDockStyle: React.CSSProperties = {
   position: 'absolute',
-  right: 18,
-  top: '50%',
+  right: 0,
+  top: '44%',
   transform: 'translateY(-50%)',
-  zIndex: 15,
+  zIndex: 20,
   display: 'flex',
   flexDirection: 'column',
-  gap: 12,
+  alignItems: 'flex-end',
+  gap: 10,
 };
 
 const bottomDockStyle: React.CSSProperties = {
@@ -1067,29 +848,8 @@ const modalInputStyle: React.CSSProperties = {
   padding: '8px 12px',
   fontSize: 12,
   fontWeight: 700,
-  minWidth: 160,
+  minWidth: 150,
 };
-
-function floatingBtnStyle(active: boolean, borderColor: string): React.CSSProperties {
-  return {
-    background: active ? 'rgba(2, 132, 199, 0.92)' : 'rgba(15, 23, 42, 0.86)',
-    backdropFilter: 'blur(10px)',
-    color: '#f8fafc',
-    border: `1px solid ${active ? '#fff' : borderColor}`,
-    borderRadius: 14,
-    padding: '10px 14px',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: 4,
-    width: 116,
-    fontSize: 11,
-    fontWeight: 800,
-    cursor: 'pointer',
-    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.55)',
-    textAlign: 'center',
-  };
-}
 
 const statBox: React.CSSProperties = {
   background: '#060a14',
