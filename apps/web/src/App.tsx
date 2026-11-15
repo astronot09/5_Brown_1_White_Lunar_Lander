@@ -51,7 +51,7 @@ const CONTROL_REPLAY_PRESETS: ControlReplayPreset[] = [
     lonDeg: 23.47314,
     utcIso: '1969-07-20T20:17:40Z',
     windowDays: 14.77,
-    panelPreset: 'HORIZONTAL_FIXED',
+    panelPreset: 'horizontal_fixed' as PanelPreset,
     expectedOutcome: 'Sun elevation 10.70° (inside 5–13° Apollo design band); Earth continuously high at 59.2°.',
     toleranceNote: 'JPL Horizons baseline ±0.01° · Near-side Mare Tranquillitatis',
   },
@@ -64,7 +64,7 @@ const CONTROL_REPLAY_PRESETS: ControlReplayPreset[] = [
     lonDeg: 177.5991,
     utcIso: '2019-01-03T02:26:00Z',
     windowDays: 29.53,
-    panelPreset: 'HORIZONTAL_FIXED',
+    panelPreset: 'horizontal_fixed' as PanelPreset,
     expectedOutcome: 'Earth NEVER rises above horizon (max -37.4°); DTE = 0.0% ("Relay required" gate active).',
     toleranceNote: 'Von Kármán crater · Far-side negative control',
   },
@@ -77,7 +77,7 @@ const CONTROL_REPLAY_PRESETS: ControlReplayPreset[] = [
     lonDeg: 1.44,
     utcIso: '2024-02-22T23:23:53Z',
     windowDays: 14.77,
-    panelPreset: 'VERTICAL_TRACKING',
+    panelPreset: 'vertical_tracking' as PanelPreset,
     expectedOutcome: 'Landing Sun 10.47°; ~12° slope tip-over + NW crater ridge caused power loss ~Feb 29 (3d before smooth sunset).',
     toleranceNote: 'Malapert A · Pre-registered LOLA terrain occlusion test',
   },
@@ -90,7 +90,7 @@ const CONTROL_REPLAY_PRESETS: ControlReplayPreset[] = [
     lonDeg: 61.8103,
     utcIso: '2025-03-14T05:00:00Z',
     windowDays: 7,
-    panelPreset: 'HORIZONTAL_FIXED',
+    panelPreset: 'horizontal_fixed' as PanelPreset,
     expectedOutcome: 'Total solar eclipse by Earth on 2025-03-14 (Totality 06:18–08:34 UTC; diamond ring within 4 min).',
     toleranceNote: 'Mare Crisium, Mons Latreille · NASA GSFC U1–U4 contact check',
   },
@@ -103,7 +103,7 @@ const CONTROL_REPLAY_PRESETS: ControlReplayPreset[] = [
     lonDeg: 25.251,
     utcIso: '2024-01-19T15:20:00Z',
     windowDays: 29.53,
-    panelPreset: 'HORIZONTAL_FIXED',
+    panelPreset: 'horizontal_fixed' as PanelPreset,
     expectedOutcome: 'Inverted landing oriented solar cells West; power restored only after local lunar noon across 4/4 lunations.',
     toleranceNote: 'Shioli crater rim · Directional array azimuth test',
   },
@@ -116,7 +116,7 @@ const CONTROL_REPLAY_PRESETS: ControlReplayPreset[] = [
     lonDeg: 0.0,
     utcIso: '2026-11-14T00:00:00Z',
     windowDays: 346.6,
-    panelPreset: 'VERTICAL_TRACKING',
+    panelPreset: 'vertical_tracking' as PanelPreset,
     expectedOutcome: 'Solar elevation bounded within ±1.6° (-1.59° to +1.56°) over the 346.6-day eclipse year; Earth oscillates ±7°.',
     toleranceNote: 'Exact South Pole (90°S) · Orbital obliquity & libration invariant',
   },
@@ -217,7 +217,7 @@ function computeSiteDiagnostics(
   site: CuratedLunarSite,
   states: SimulationStepState[],
   currentState: SimulationStepState,
-  metrics: {
+  _metrics: {
     illuminationPct: number;
     dteAvailabilityPct: number;
   },
@@ -1694,7 +1694,7 @@ export function App() {
   };
 
   const handleExportCsv = () => {
-    const rows = report.states as Record<string, unknown>[];
+    const rows = report.states as unknown as Record<string, unknown>[];
     if (!rows || rows.length === 0) return;
     const headers = Object.keys(rows[0]!).filter(
       (k) => typeof rows[0]![k] !== 'object' || rows[0]![k] === null,
