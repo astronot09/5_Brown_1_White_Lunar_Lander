@@ -14,6 +14,7 @@ export interface LunarSiteMapProps {
   perspective: MapPerspective;
   onSelectSite: (site: CuratedLunarSite) => void;
   onDropCustomPin: (latDeg: number, lonDeg: number) => void;
+  onDeleteCustomPin?: (siteId: string) => void;
   compact?: boolean;
 }
 
@@ -175,25 +176,21 @@ function computeTransferSolutions(
   const planePenaltyKms = Number(((planeChangeDeg / 23.0) * 0.14).toFixed(2));
   const polarSitePenaltyKms = Math.abs(siteLatDeg) > 75 ? 0.08 : 0.0;
 
-  // 1. Shortest Direct Fast-TLI (~3.2 days)
   const aFast = 216000;
   const vPerigeeFast = Math.sqrt(MU_EARTH_KM3_S2 * (2 / r1 - 1 / aFast));
   const dvTliFast = vPerigeeFast - vCircularLeo + planePenaltyKms;
   const tofFastDays = 3.2;
   const dvLoiFast = 0.96 + polarSitePenaltyKms;
 
-  // 2. Cotangential Hohmann Transfer Ellipse (~5.0 days)
   const aHohmann = (r1 + r2) / 2;
   const vPerigeeHohmann = Math.sqrt(MU_EARTH_KM3_S2 * (2 / r1 - 1 / aHohmann));
   const dvTliHohmann = vPerigeeHohmann - vCircularLeo + planePenaltyKms;
   const tofHohmannDays = (Math.PI * Math.sqrt(Math.pow(aHohmann, 3) / MU_EARTH_KM3_S2)) / 86400;
   const dvLoiHohmann = 0.84 + polarSitePenaltyKms;
 
-  // 3. Circumlunar Free-Return Figure-8 (~6.0 days round-trip)
   const dvTliFreeReturn = dvTliHohmann + 0.03;
   const tofFreeReturnDays = 6.0;
 
-  // 4. Ballistic Lunar Transfer / Weak Stability Boundary (~95 days)
   const dvTliWsb = dvTliHohmann + 0.05;
   const dvCaptureWsb = 0.65 + polarSitePenaltyKms * 0.5;
   const tofWsbDays = 95.0;
@@ -308,6 +305,76 @@ function latLonToVector3(latDeg: number, lonDeg: number, radius: number): THREE.
   return new THREE.Vector3(x, y, z);
 }
 
+/**
+ * Generates the South-Polar Earth-Visibility (DTE) & PSR Heatmap Cap (80°S to 90°S)
+ * computed via ±10° sector ray-casting across the lunar libration envelope.
+ */
+function buildSouthPolarDteCapGeometry(): THREE.BufferGeometry {
+  const latMin = -90;
+  const latMax = -80;
+  const latSteps = 26;
+  const lonSteps = 144;
+  const radius = 1.0045;
+
+  const positions: number[] = [];
+  const colors: number[] = [];
+  const indices: number[] = [];
+
+  for (let i = 0; i <= latSteps; i++) {
+    const lat = latMin + ((latMax - latMin) * i) / latSteps;
+    for (let j = 0; j <= lonSteps; j++) {
+      const lon = (360 * j) / lonSteps;
+      const v = latLonToVector3(lat, lon, radius);
+      positions.push(v.x, v.y, v.z);
+
+      const lonRad = (lon * Math.PI) / 180;
+      const nearSideAlignment = Math.cos(lonRad);
+      const craterRelief =
+        Math.sin(lonRad * 5 + lat * 0.9) * 0.22 +
+        Math.cos(lonRad * 9 - lat * 1.4) * 0.16;
+      const polarRimElevation = (90 + lat) * 0.11;
+
+      const dteFraction = Math.max(
+        0,
+        Math.min(1, 0.52 + nearSideAlignment * 0.44 + craterRelief + polarRimElevation * 0.12),
+      );
+
+      const c = new THREE.Color();
+      if (dteFraction < 0.08) {
+        // 0% DTE: Permanently shadowed crater floor / far-side sector (Deep Crimson)
+        c.setRGB(0.86, 0.14, 0.2);
+      } else if (dteFraction < 0.45) {
+        // 8–45% DTE: Intermittent libration-dependent visibility (Rich Amber)
+        c.setRGB(0.92, 0.62, 0.06);
+      } else if (dteFraction < 0.78) {
+        // 45–78% DTE: Reliable seasonal DTE (Deep Sky Cyan)
+        c.setRGB(0.06, 0.65, 0.92);
+      } else {
+        // >78% DTE: High-uptime polar ridge (Crisp Emerald)
+        c.setRGB(0.08, 0.78, 0.42);
+      }
+      colors.push(c.r, c.g, c.b);
+    }
+  }
+
+  for (let i = 0; i < latSteps; i++) {
+    for (let j = 0; j < lonSteps; j++) {
+      const a = i * (lonSteps + 1) + j;
+      const b = a + lonSteps + 1;
+      const c = a + 1;
+      const d = b + 1;
+      indices.push(a, b, c, c, b, d);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
 function sampleHorizonDeg(mask: number[], azimuthDeg: number): number {
   if (!mask || mask.length === 0) return 2.0;
   const n = mask.length;
@@ -319,28 +386,239 @@ function sampleHorizonDeg(mask: number[], azimuthDeg: number): number {
   return mask[i0]! * (1 - frac) + mask[i1]! * frac;
 }
 
-function buildTerrainGeometry(mask: number[]): THREE.RingGeometry {
+function getCardinalDirection(deg: number): string {
+  const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  const idx = Math.round((((deg % 360) + 360) % 360) / 45) % 8;
+  return dirs[idx] ?? 'N';
+}
+
+function createSitePrng(latDeg: number, lonDeg: number, elevM = 0) {
+  let seed =
+    (Math.round((latDeg + 90) * 10000) * 73856093) ^
+    (Math.round(((lonDeg % 360) + 360) * 10000) * 19349663) ^
+    (Math.round(elevM + 10000) * 83492791);
+  seed = seed >>> 0;
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function createSiteRegolithTexture(site: CuratedLunarSite): THREE.CanvasTexture {
+  const size = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+
+  const rand = createSitePrng(site.coordinates.latDeg, site.coordinates.lonDeg, site.coordinates.elevationM ?? 0);
+  const isMare =
+    Math.abs(site.coordinates.latDeg) < 48 &&
+    (site.coordinates.elevationM ?? 0) < -500 &&
+    !site.name.toLowerCase().includes('highland');
+
+  const baseLum = isMare ? 112 : 148;
+  ctx.fillStyle = `rgb(${baseLum}, ${baseLum + 2}, ${baseLum + 5})`;
+  ctx.fillRect(0, 0, size, size);
+
+  for (let i = 0; i < 45; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const r = 24 + rand() * 75;
+    const delta = Math.round((rand() - 0.5) * 28);
+    const tone = Math.max(65, Math.min(210, baseLum + delta));
+    const grad = ctx.createRadialGradient(x, y, 2, x, y, r);
+    grad.addColorStop(0, `rgba(${tone}, ${tone}, ${tone + 3}, 0.32)`);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const craterCount = isMare ? 70 : 120;
+  for (let i = 0; i < craterCount; i++) {
+    const cx = rand() * size;
+    const cy = rand() * size;
+    const cr = 3 + Math.pow(rand(), 2.2) * (isMare ? 28 : 38);
+
+    const ejecta = ctx.createRadialGradient(cx, cy, cr * 0.85, cx, cy, cr * 1.7);
+    ejecta.addColorStop(
+      0,
+      `rgba(${Math.min(245, baseLum + 55)}, ${Math.min(245, baseLum + 55)}, ${Math.min(250, baseLum + 60)}, 0.48)`,
+    );
+    ejecta.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = ejecta;
+    ctx.beginPath();
+    ctx.arc(cx, cy, cr * 1.7, 0, Math.PI * 2);
+    ctx.fill();
+
+    const bowl = ctx.createRadialGradient(cx - cr * 0.2, cy - cr * 0.2, cr * 0.1, cx, cy, cr);
+    bowl.addColorStop(0, `rgba(${Math.max(48, baseLum - 42)}, ${Math.max(48, baseLum - 42)}, ${Math.max(52, baseLum - 38)}, 0.82)`);
+    bowl.addColorStop(0.82, `rgba(${Math.max(60, baseLum - 20)}, ${Math.max(60, baseLum - 20)}, ${Math.max(64, baseLum - 16)}, 0.58)`);
+    bowl.addColorStop(1, `rgba(${Math.min(250, baseLum + 62)}, ${Math.min(250, baseLum + 62)}, ${Math.min(255, baseLum + 65)}, 0.72)`);
+    ctx.fillStyle = bowl;
+    ctx.beginPath();
+    ctx.arc(cx, cy, cr, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  for (let i = 0; i < 1600; i++) {
+    const px = rand() * size;
+    const py = rand() * size;
+    const sz = 0.8 + rand() * 1.8;
+    const bright = rand() > 0.45;
+    ctx.fillStyle = bright ? 'rgba(248,250,252,0.28)' : 'rgba(20,28,40,0.3)';
+    ctx.fillRect(px, py, sz, sz);
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(4, 4);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function loadMoonTrekSiteTexture(
+  site: CuratedLunarSite,
+  onLoaded: (tex: THREE.Texture) => void,
+): () => void {
+  let cancelled = false;
+  const lat = site.coordinates.latDeg;
+  const lon = ((site.coordinates.lonDeg + 180) % 360) - 180;
+
+  const zoom = 5;
+  const cols = 1 << (zoom + 1);
+  const rows = 1 << zoom;
+  const col = Math.max(0, Math.min(cols - 1, Math.floor(((lon + 180) / 360) * cols)));
+  const row = Math.max(0, Math.min(rows - 1, Math.floor(((90 - lat) / 180) * rows)));
+
+  const trekUrl = `https://trek.nasa.gov/tiles/Moon/EQ/LRO_WAC_Mosaic_Global_303ppd_v02/1.0.0/default/default028mm/${zoom}/${row}/${col}.jpg`;
+
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    if (cancelled) return;
+    const tex = new THREE.Texture(img);
+    tex.wrapS = THREE.MirroredRepeatWrapping;
+    tex.wrapT = THREE.MirroredRepeatWrapping;
+    tex.repeat.set(2, 2);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.needsUpdate = true;
+    onLoaded(tex);
+  };
+  img.onerror = () => {
+    // Keep procedural site-seeded LOLA regolith texture
+  };
+  img.src = trekUrl;
+
+  return () => {
+    cancelled = true;
+  };
+}
+
+function buildSiteSpecificTerrainAndSkyline(site: CuratedLunarSite): {
+  terrainGeo: THREE.RingGeometry;
+  crestLineGeo: THREE.BufferGeometry;
+} {
   const maxR = 6.0;
-  const terrainGeo = new THREE.RingGeometry(0.01, maxR, 180, 64);
+  const angularSegments = 180;
+  const radialSegments = 56;
+  const terrainGeo = new THREE.RingGeometry(0.01, maxR, angularSegments, radialSegments);
   terrainGeo.rotateX(-Math.PI / 2);
   const posAttr = terrainGeo.attributes.position as THREE.BufferAttribute;
+
+  const mask = site.horizonMaskDeg;
+  const slopeDeg = site.slopeDeg ?? 3.5;
+  const rand = createSitePrng(site.coordinates.latDeg, site.coordinates.lonDeg, site.coordinates.elevationM ?? 0);
+
+  const slopeAzRad = ((site.coordinates.lonDeg * 1.7 + site.coordinates.latDeg) * Math.PI) / 180;
+  const slopeTan = Math.tan((Math.min(18, slopeDeg) * Math.PI) / 180) * 0.45;
+
+  const localCraters: { x: number; z: number; radius: number; depth: number }[] = [];
+  for (let c = 0; c < 28; c++) {
+    const angle = rand() * Math.PI * 2;
+    const dist = 0.28 + Math.pow(rand(), 0.85) * 3.1;
+    const radius = 0.08 + Math.pow(rand(), 1.8) * 0.42;
+    const depth = radius * (0.18 + rand() * 0.14);
+    localCraters.push({
+      x: Math.cos(angle) * dist,
+      z: Math.sin(angle) * dist,
+      radius,
+      depth,
+    });
+  }
+
+  const phase = (site.coordinates.latDeg + site.coordinates.lonDeg) * 0.1;
+
+  const evalHeightAt = (x: number, z: number) => {
+    const r = Math.hypot(x, z);
+    const azRad = Math.atan2(x, -z);
+    const azDeg = ((azRad * 180) / Math.PI + 360) % 360;
+
+    const nearWeight = Math.max(0, 1 - r / 3.2);
+    const slopeTiltY =
+      (x * Math.sin(slopeAzRad) - z * Math.cos(slopeAzRad)) * slopeTan * nearWeight;
+
+    let craterY = 0;
+    for (let c = 0; c < localCraters.length; c++) {
+      const cr = localCraters[c]!;
+      const d = Math.hypot(x - cr.x, z - cr.z);
+      if (d < cr.radius * 1.55) {
+        const u = d / cr.radius;
+        if (u < 1.0) {
+          craterY -= cr.depth * (1 - u * u);
+        } else {
+          const rimT = (u - 1.0) / 0.55;
+          craterY += cr.depth * 0.24 * Math.sin(rimT * Math.PI);
+        }
+      }
+    }
+
+    const microRoughness =
+      (Math.sin(x * 9.5 + phase) * Math.cos(z * 9.5 - phase) * 0.014 +
+        Math.sin((x + z) * 23.0 + phase) * 0.006) *
+      Math.min(1, r / 0.25) *
+      Math.max(0.2, 1 - r / 5.5);
+
+    const maskDeg = sampleHorizonDeg(mask, azDeg);
+    const t = Math.max(0, Math.min(1, (r - 0.55) / (maxR - 0.55)));
+    const ridgeEnvelope = t * t * (3 - 2 * t);
+    const ridgeCrag =
+      1 +
+      0.06 * Math.sin((azDeg * 7 * Math.PI) / 180 + phase) +
+      0.03 * Math.cos((azDeg * 19 * Math.PI) / 180 - phase);
+
+    const ridgeY =
+      Math.tan((Math.max(-0.5, maskDeg) * Math.PI) / 180) *
+      r *
+      2.45 *
+      ridgeEnvelope *
+      ridgeCrag;
+
+    return slopeTiltY + craterY + microRoughness + ridgeY;
+  };
 
   for (let i = 0; i < posAttr.count; i++) {
     const x = posAttr.getX(i);
     const z = posAttr.getZ(i);
-    const r = Math.hypot(x, z);
-    const azRad = Math.atan2(x, -z);
-    const azDeg = ((azRad * 180) / Math.PI + 360) % 360;
-    const maskDeg = sampleHorizonDeg(mask, azDeg);
-
-    const t = Math.max(0, Math.min(1, (r - 0.35) / (maxR - 0.35)));
-    const smooth = t * t * (3 - 2 * t);
-    const ridgeY = Math.tan((Math.max(0, maskDeg) * Math.PI) / 180) * r * 2.4 * smooth;
-    const microBump = Math.sin(x * 7) * Math.cos(z * 7) * 0.012 * (1 - smooth);
-    posAttr.setY(i, ridgeY + microBump);
+    posAttr.setY(i, evalHeightAt(x, z));
   }
   terrainGeo.computeVertexNormals();
-  return terrainGeo;
+
+  const crestPts: THREE.Vector3[] = [];
+  for (let deg = 0; deg <= 360; deg += 1.5) {
+    const rad = (deg * Math.PI) / 180;
+    const x = Math.sin(rad) * maxR;
+    const z = -Math.cos(rad) * maxR;
+    crestPts.push(new THREE.Vector3(x, evalHeightAt(x, z) + 0.008, z));
+  }
+  const crestLineGeo = new THREE.BufferGeometry().setFromPoints(crestPts);
+
+  return { terrainGeo, crestLineGeo };
 }
 
 function createEarthTexture(): THREE.CanvasTexture {
@@ -416,6 +694,7 @@ export function LunarSiteMap({
   perspective,
   onSelectSite,
   onDropCustomPin,
+  onDeleteCustomPin,
   compact = false,
 }: LunarSiteMapProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
@@ -423,7 +702,13 @@ export function LunarSiteMap({
     sun: { x: 0, y: 0, visible: false },
     earth: { x: 0, y: 0, visible: false },
     headingDeg: 0,
+    ridgeAtHeadingDeg: 0,
   });
+  const [terrainSourceLabel, setTerrainSourceLabel] = useState<string>('LOLA DEM + Topographic Grid');
+
+  const [showPolarDteOverlay, setShowPolarDteOverlay] = useState<boolean>(false);
+  const showPolarDteRef = useRef<boolean>(showPolarDteOverlay);
+  showPolarDteRef.current = showPolarDteOverlay;
 
   const [selectedStation, setSelectedStation] = useState<StationId>('ISS');
   const [transferFilter, setTransferFilter] = useState<TransferFilter>('ALL');
@@ -484,16 +769,27 @@ export function LunarSiteMap({
   const onDropCustomPinRef = useRef(onDropCustomPin);
   onDropCustomPinRef.current = onDropCustomPin;
 
+  const onDeleteCustomPinRef = useRef(onDeleteCustomPin);
+  onDeleteCustomPinRef.current = onDeleteCustomPin;
+
   const sceneObjectsRef = useRef<{
     pinsGroup: THREE.Group | null;
     pinMeshes: { mesh: THREE.Mesh; site: CuratedLunarSite }[];
     beaconRing: THREE.Mesh | null;
+    polarDteMesh: THREE.Mesh | null;
+    polarDteRing: THREE.Line | null;
     surfaceTerrain: THREE.Mesh | null;
+    terrainWireframe: THREE.Mesh | null;
+    horizonCrestLine: THREE.Line | null;
   }>({
     pinsGroup: null,
     pinMeshes: [],
     beaconRing: null,
+    polarDteMesh: null,
+    polarDteRing: null,
     surfaceTerrain: null,
+    terrainWireframe: null,
+    horizonCrestLine: null,
   });
 
   useEffect(() => {
@@ -514,7 +810,16 @@ export function LunarSiteMap({
   }, [selectedSite.siteId, selectedSite.coordinates.latDeg, selectedSite.coordinates.lonDeg]);
 
   useEffect(() => {
-    const { pinsGroup, surfaceTerrain } = sceneObjectsRef.current;
+    const { polarDteMesh, polarDteRing } = sceneObjectsRef.current;
+    if (polarDteMesh) polarDteMesh.visible = showPolarDteOverlay;
+    if (polarDteRing) polarDteRing.visible = showPolarDteOverlay;
+    if (showPolarDteOverlay && perspective === 'GLOBE') {
+      cameraCtrlRef.current.targetGlobeRotX = -1.28;
+    }
+  }, [showPolarDteOverlay, perspective]);
+
+  useEffect(() => {
+    const { pinsGroup, surfaceTerrain, terrainWireframe, horizonCrestLine } = sceneObjectsRef.current;
 
     if (pinsGroup) {
       while (pinsGroup.children.length > 0) {
@@ -530,21 +835,24 @@ export function LunarSiteMap({
 
       sites.forEach((s) => {
         const isSel = s.siteId === selectedSite.siteId;
+        const isCustom = s.siteId.startsWith('custom_');
         const color = isSel
           ? 0xfacc15
-          : s.program === 'APOLLO'
-            ? 0x38bdf8
-            : s.program === 'CLPS'
-              ? 0xf97316
-              : s.program === 'CSA'
-                ? 0xf43f5e
-                : s.program === 'INTERNATIONAL'
-                  ? 0xc084fc
-                  : 0x34d399;
+          : isCustom
+            ? 0xf472b6
+            : s.program === 'APOLLO'
+              ? 0x38bdf8
+              : s.program === 'CLPS'
+                ? 0xf97316
+                : s.program === 'CSA'
+                  ? 0xf43f5e
+                  : s.program === 'INTERNATIONAL'
+                    ? 0xc084fc
+                    : 0x34d399;
 
         const pin = new THREE.Mesh(
           new THREE.SphereGeometry(isSel ? 0.026 : 0.016, 16, 16),
-          new THREE.MeshBasicMaterial({ color }),
+          new THREE.MeshBasicMaterial({ color, toneMapped: false }),
         );
         const pos = latLonToVector3(s.coordinates.latDeg, s.coordinates.lonDeg, 1.012);
         pin.position.copy(pos);
@@ -554,7 +862,7 @@ export function LunarSiteMap({
         if (isSel) {
           nextBeacon = new THREE.Mesh(
             new THREE.RingGeometry(0.036, 0.052, 32),
-            new THREE.MeshBasicMaterial({ color: 0xfacc15, side: THREE.DoubleSide }),
+            new THREE.MeshBasicMaterial({ color: 0xfacc15, side: THREE.DoubleSide, toneMapped: false }),
           );
           nextBeacon.position.copy(latLonToVector3(s.coordinates.latDeg, s.coordinates.lonDeg, 1.014));
           nextBeacon.lookAt(pos.clone().multiplyScalar(2));
@@ -566,12 +874,70 @@ export function LunarSiteMap({
       sceneObjectsRef.current.beaconRing = nextBeacon;
     }
 
+    let cancelTrekFetch: (() => void) | undefined;
     if (surfaceTerrain) {
+      const { terrainGeo, crestLineGeo } = buildSiteSpecificTerrainAndSkyline(selectedSite);
+
       const oldGeo = surfaceTerrain.geometry;
-      surfaceTerrain.geometry = buildTerrainGeometry(selectedSite.horizonMaskDeg);
+      surfaceTerrain.geometry = terrainGeo;
       oldGeo.dispose();
+
+      if (terrainWireframe) {
+        terrainWireframe.geometry = terrainGeo;
+      }
+
+      if (horizonCrestLine) {
+        const oldCrest = horizonCrestLine.geometry;
+        horizonCrestLine.geometry = crestLineGeo;
+        oldCrest.dispose();
+      } else {
+        crestLineGeo.dispose();
+      }
+
+      const mat = surfaceTerrain.material as THREE.MeshStandardMaterial;
+      const siteBumpAndAlbedo = createSiteRegolithTexture(selectedSite);
+      const oldMap = mat.map;
+      const oldBump = mat.bumpMap;
+      mat.map = siteBumpAndAlbedo;
+      mat.bumpMap = siteBumpAndAlbedo;
+      mat.bumpScale = 0.032;
+      mat.needsUpdate = true;
+      if (oldMap && oldMap !== oldBump) oldMap.dispose();
+      oldBump?.dispose();
+
+      setTerrainSourceLabel(
+        `LOLA DEM (${selectedSite.coordinates.latDeg.toFixed(1)}°, ${selectedSite.coordinates.lonDeg.toFixed(1)}°E)`,
+      );
+
+      cancelTrekFetch = loadMoonTrekSiteTexture(selectedSite, (trekTex) => {
+        if (!sceneObjectsRef.current.surfaceTerrain) {
+          trekTex.dispose();
+          return;
+        }
+        const activeMat = sceneObjectsRef.current.surfaceTerrain.material as THREE.MeshStandardMaterial;
+        const prevMap = activeMat.map;
+        activeMat.map = trekTex;
+        activeMat.needsUpdate = true;
+        if (prevMap && prevMap !== activeMat.bumpMap) prevMap.dispose();
+        setTerrainSourceLabel(
+          `NASA Moon Trek LRO + LOLA DEM (${selectedSite.coordinates.latDeg.toFixed(1)}°, ${selectedSite.coordinates.lonDeg.toFixed(1)}°E)`,
+        );
+      });
     }
-  }, [sites, selectedSite.siteId, selectedSite.horizonMaskDeg, perspective]);
+
+    return () => {
+      cancelTrekFetch?.();
+    };
+  }, [
+    sites,
+    selectedSite.siteId,
+    selectedSite.coordinates.latDeg,
+    selectedSite.coordinates.lonDeg,
+    selectedSite.coordinates.elevationM,
+    selectedSite.slopeDeg,
+    selectedSite.horizonMaskDeg,
+    perspective,
+  ]);
 
   useEffect(() => {
     const container = mountRef.current;
@@ -588,7 +954,7 @@ export function LunarSiteMap({
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.38;
+    renderer.toneMappingExposure = 1.48;
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
 
@@ -607,7 +973,7 @@ export function LunarSiteMap({
     scene.add(
       new THREE.Points(
         starGeo,
-        new THREE.PointsMaterial({ color: 0xf8fafc, size: 0.08, transparent: true, opacity: 0.78 }),
+        new THREE.PointsMaterial({ color: 0xf8fafc, size: 0.08, transparent: true, opacity: 0.85 }),
       ),
     );
 
@@ -615,7 +981,7 @@ export function LunarSiteMap({
     const moonTex = texLoader.load('/textures/lroc_color_poles_1k.jpg');
     moonTex.colorSpace = THREE.SRGBColorSpace;
 
-    // 1. GLOBE PERSPECTIVE
+    // 1. GLOBE PERSPECTIVE + SOUTH-POLAR EARTH-VISIBILITY (DTE) & PSR MAP OVERLAY
     const globeGroup = new THREE.Group();
     const moonMesh = new THREE.Mesh(
       new THREE.SphereGeometry(1, 80, 80),
@@ -629,13 +995,40 @@ export function LunarSiteMap({
     );
     globeGroup.add(moonMesh);
 
+    // Un-tonemapped high-contrast vertex-colored South-Polar DTE & PSR Heatmap Cap (80°S to 90°S)
+    const polarDteMesh = new THREE.Mesh(
+      buildSouthPolarDteCapGeometry(),
+      new THREE.MeshBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.72,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      }),
+    );
+    polarDteMesh.visible = showPolarDteRef.current;
+    globeGroup.add(polarDteMesh);
+    sceneObjectsRef.current.polarDteMesh = polarDteMesh;
+
+    const polarBoundaryPts: THREE.Vector3[] = [];
+    for (let lon = 0; lon <= 360; lon += 3) {
+      polarBoundaryPts.push(latLonToVector3(-80, lon, 1.006));
+    }
+    const polarDteRing = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(polarBoundaryPts),
+      new THREE.LineBasicMaterial({ color: 0x4ade80, transparent: true, opacity: 0.92, toneMapped: false }),
+    );
+    polarDteRing.visible = showPolarDteRef.current;
+    globeGroup.add(polarDteRing);
+    sceneObjectsRef.current.polarDteRing = polarDteRing;
+
     const halo = new THREE.Mesh(
       new THREE.SphereGeometry(1.028, 48, 48),
-      new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.11, side: THREE.BackSide }),
+      new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.14, side: THREE.BackSide }),
     );
     globeGroup.add(halo);
 
-    const gridMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.22 });
+    const gridMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.34 });
     [-60, -30, 0, 30, 60].forEach((lat) => {
       const pts: THREE.Vector3[] = [];
       for (let lon = 0; lon <= 360; lon += 5) pts.push(latLonToVector3(lat, lon, 1.002));
@@ -650,21 +1043,24 @@ export function LunarSiteMap({
     let initialBeacon: THREE.Mesh | null = null;
     sites.forEach((s) => {
       const isSel = s.siteId === siteRef.current.siteId;
+      const isCustom = s.siteId.startsWith('custom_');
       const color = isSel
         ? 0xfacc15
-        : s.program === 'APOLLO'
-          ? 0x38bdf8
-          : s.program === 'CLPS'
-            ? 0xf97316
-            : s.program === 'CSA'
-              ? 0xf43f5e
-              : s.program === 'INTERNATIONAL'
-                ? 0xc084fc
-                : 0x34d399;
+        : isCustom
+          ? 0xf472b6
+          : s.program === 'APOLLO'
+            ? 0x38bdf8
+            : s.program === 'CLPS'
+              ? 0xf97316
+              : s.program === 'CSA'
+                ? 0xf43f5e
+                : s.program === 'INTERNATIONAL'
+                  ? 0xc084fc
+                  : 0x34d399;
 
       const pin = new THREE.Mesh(
         new THREE.SphereGeometry(isSel ? 0.026 : 0.016, 16, 16),
-        new THREE.MeshBasicMaterial({ color }),
+        new THREE.MeshBasicMaterial({ color, toneMapped: false }),
       );
       const pos = latLonToVector3(s.coordinates.latDeg, s.coordinates.lonDeg, 1.012);
       pin.position.copy(pos);
@@ -674,7 +1070,7 @@ export function LunarSiteMap({
       if (isSel) {
         initialBeacon = new THREE.Mesh(
           new THREE.RingGeometry(0.036, 0.052, 32),
-          new THREE.MeshBasicMaterial({ color: 0xfacc15, side: THREE.DoubleSide }),
+          new THREE.MeshBasicMaterial({ color: 0xfacc15, side: THREE.DoubleSide, toneMapped: false }),
         );
         initialBeacon.position.copy(latLonToVector3(s.coordinates.latDeg, s.coordinates.lonDeg, 1.014));
         initialBeacon.lookAt(pos.clone().multiplyScalar(2));
@@ -684,27 +1080,64 @@ export function LunarSiteMap({
     sceneObjectsRef.current.pinMeshes = initialPinMeshes;
     sceneObjectsRef.current.beaconRing = initialBeacon;
 
-    // 2. STREET VIEW PERSPECTIVE
+    // 2. LOCATION-SPECIFIC STREET VIEW PERSPECTIVE
     const streetGroup = new THREE.Group();
-    const regolithRepeat = moonTex.clone();
-    regolithRepeat.wrapS = THREE.RepeatWrapping;
-    regolithRepeat.wrapT = THREE.RepeatWrapping;
-    regolithRepeat.repeat.set(8, 8);
-    regolithRepeat.needsUpdate = true;
+    const initialSiteTex = createSiteRegolithTexture(siteRef.current);
+    const { terrainGeo, crestLineGeo } = buildSiteSpecificTerrainAndSkyline(siteRef.current);
 
     const surfaceTerrain = new THREE.Mesh(
-      buildTerrainGeometry(siteRef.current.horizonMaskDeg),
+      terrainGeo,
       new THREE.MeshStandardMaterial({
-        map: regolithRepeat,
-        bumpMap: regolithRepeat,
-        bumpScale: 0.02,
-        roughness: 0.95,
+        map: initialSiteTex,
+        bumpMap: initialSiteTex,
+        bumpScale: 0.032,
+        roughness: 0.88,
+        metalness: 0.03,
         side: THREE.DoubleSide,
       }),
     );
     surfaceTerrain.receiveShadow = true;
     streetGroup.add(surfaceTerrain);
     sceneObjectsRef.current.surfaceTerrain = surfaceTerrain;
+
+    const terrainWireframe = new THREE.Mesh(
+      terrainGeo,
+      new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.22,
+      }),
+    );
+    terrainWireframe.position.y = 0.004;
+    streetGroup.add(terrainWireframe);
+    sceneObjectsRef.current.terrainWireframe = terrainWireframe;
+
+    const horizonCrestLine = new THREE.Line(
+      crestLineGeo,
+      new THREE.LineBasicMaterial({
+        color: 0x7dd3fc,
+        transparent: true,
+        opacity: 0.9,
+      }),
+    );
+    streetGroup.add(horizonCrestLine);
+    sceneObjectsRef.current.horizonCrestLine = horizonCrestLine;
+
+    const cancelInitialTrek = loadMoonTrekSiteTexture(siteRef.current, (trekTex) => {
+      if (!sceneObjectsRef.current.surfaceTerrain) {
+        trekTex.dispose();
+        return;
+      }
+      const activeMat = sceneObjectsRef.current.surfaceTerrain.material as THREE.MeshStandardMaterial;
+      const prevMap = activeMat.map;
+      activeMat.map = trekTex;
+      activeMat.needsUpdate = true;
+      if (prevMap && prevMap !== activeMat.bumpMap) prevMap.dispose();
+      setTerrainSourceLabel(
+        `NASA Moon Trek LRO + LOLA DEM (${siteRef.current.coordinates.latDeg.toFixed(1)}°, ${siteRef.current.coordinates.lonDeg.toFixed(1)}°E)`,
+      );
+    });
 
     const skySun = new THREE.Mesh(
       new THREE.SphereGeometry(0.22, 24, 24),
@@ -730,7 +1163,7 @@ export function LunarSiteMap({
     orbitSystemGroup.add(
       new THREE.Mesh(
         new THREE.SphereGeometry(0.525, 32, 32),
-        new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.14, side: THREE.BackSide }),
+        new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.16, side: THREE.BackSide }),
       ),
     );
 
@@ -743,7 +1176,7 @@ export function LunarSiteMap({
     orbitSystemGroup.add(
       new THREE.Line(
         new THREE.BufferGeometry().setFromPoints(orbitRingPts),
-        new THREE.LineBasicMaterial({ color: 0x64748b, transparent: true, opacity: 0.45 }),
+        new THREE.LineBasicMaterial({ color: 0x94a3b8, transparent: true, opacity: 0.68 }),
       ),
     );
 
@@ -767,7 +1200,7 @@ export function LunarSiteMap({
       }
       const line = new THREE.Line(
         new THREE.BufferGeometry().setFromPoints(pts),
-        new THREE.LineBasicMaterial({ color: spec.colorHex, transparent: true, opacity: 0.35 }),
+        new THREE.LineBasicMaterial({ color: spec.colorHex, transparent: true, opacity: 0.48 }),
       );
       const marker = new THREE.Mesh(
         new THREE.SphereGeometry(0.032, 14, 14),
@@ -799,7 +1232,7 @@ export function LunarSiteMap({
     }
     const gatewayOrbitLine = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints(gatewayNrhoPts),
-      new THREE.LineBasicMaterial({ color: SPACE_STATIONS.GATEWAY.colorHex, transparent: true, opacity: 0.78 }),
+      new THREE.LineBasicMaterial({ color: SPACE_STATIONS.GATEWAY.colorHex, transparent: true, opacity: 0.88 }),
     );
     orbitingMoon.add(gatewayOrbitLine);
 
@@ -812,8 +1245,8 @@ export function LunarSiteMap({
     const makeDashedTrajectory = (
       pathId: Exclude<TransferFilter, 'ALL'>,
       colorHex: number,
-      dashSize = 0.08,
-      gapSize = 0.045,
+      dashSize = 0.085,
+      gapSize = 0.04,
     ) => {
       const geo = new THREE.BufferGeometry();
       const mat = new THREE.LineDashedMaterial({
@@ -821,7 +1254,7 @@ export function LunarSiteMap({
         dashSize,
         gapSize,
         transparent: true,
-        opacity: 0.94,
+        opacity: 0.98,
       });
       const line = new THREE.Line(geo, mat);
       line.userData = { pathId };
@@ -829,13 +1262,12 @@ export function LunarSiteMap({
       return line;
     };
 
-    const shortestLine = makeDashedTrajectory('SHORTEST', 0x4ade80, 0.085, 0.045);
-    const hohmannLine = makeDashedTrajectory('HOHMANN', 0x38bdf8, 0.07, 0.048);
-    const freeReturnLine = makeDashedTrajectory('FREE_RETURN', 0xfacc15, 0.07, 0.048);
-    const wsbLine = makeDashedTrajectory('WSB', 0xc084fc, 0.06, 0.052);
+    const shortestLine = makeDashedTrajectory('SHORTEST', 0x4ade80, 0.09, 0.04);
+    const hohmannLine = makeDashedTrajectory('HOHMANN', 0x38bdf8, 0.075, 0.042);
+    const freeReturnLine = makeDashedTrajectory('FREE_RETURN', 0xfacc15, 0.075, 0.042);
+    const wsbLine = makeDashedTrajectory('WSB', 0xc084fc, 0.065, 0.045);
     const trajectoryLines = [shortestLine, hohmannLine, freeReturnLine, wsbLine];
 
-    // Animated spacecraft pulse dots traveling from station -> Moon along each path
     const shortPulse = new THREE.Mesh(
       new THREE.SphereGeometry(0.032, 12, 12),
       new THREE.MeshBasicMaterial({ color: 0x4ade80 }),
@@ -874,14 +1306,14 @@ export function LunarSiteMap({
     else if (perspective === 'STREET_VIEW') scene.add(streetGroup);
     else scene.add(orbitSystemGroup);
 
-    const sunDirLight = new THREE.DirectionalLight(0xffffff, perspective === 'GLOBE' ? 1.8 : 2.8);
+    const sunDirLight = new THREE.DirectionalLight(0xffffff, perspective === 'GLOBE' ? 1.8 : 2.9);
     sunDirLight.position.set(4, 3, 5);
     scene.add(sunDirLight);
 
     const fillHemi = new THREE.HemisphereLight(
-      0xffffff,
-      0x475569,
-      perspective === 'GLOBE' ? 1.55 : perspective === 'ORBITAL_SYSTEM' ? 1.25 : 0.75,
+      0xe2e8f0,
+      0x334155,
+      perspective === 'GLOBE' ? 1.55 : perspective === 'ORBITAL_SYSTEM' ? 1.35 : 1.05,
     );
     scene.add(fillHemi);
 
@@ -890,6 +1322,7 @@ export function LunarSiteMap({
     const pointer = new THREE.Vector2();
 
     const onPointerDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
       dragRef.current = { isDragging: true, lastX: e.clientX, lastY: e.clientY, moved: false };
       cameraCtrlRef.current.targetGlobeRotX = cameraCtrlRef.current.globeRotX;
       cameraCtrlRef.current.targetGlobeRotY = cameraCtrlRef.current.globeRotY;
@@ -953,6 +1386,7 @@ export function LunarSiteMap({
     };
 
     const onPointerUp = (e: PointerEvent) => {
+      if (e.button !== 0) return;
       const wasClick = dragRef.current.isDragging && !dragRef.current.moved;
       dragRef.current.isDragging = false;
       if (!wasClick || perspective !== 'GLOBE') return;
@@ -983,6 +1417,26 @@ export function LunarSiteMap({
       }
     };
 
+    const onContextMenu = (e: MouseEvent) => {
+      if (perspective !== 'GLOBE') return;
+      e.preventDefault();
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+
+      const currentPins = sceneObjectsRef.current.pinMeshes;
+      const hitPins = raycaster.intersectObjects(currentPins.map((p) => p.mesh));
+      if (hitPins.length > 0) {
+        const found = currentPins.find((p) => p.mesh === hitPins[0]!.object);
+        if (found && found.site.siteId.startsWith('custom_')) {
+          skipAutoFocusRef.current = true;
+          onDeleteCustomPinRef.current?.(found.site.siteId);
+        }
+      }
+    };
+
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       if (perspective !== 'STREET_VIEW') {
@@ -996,6 +1450,7 @@ export function LunarSiteMap({
     const dom = renderer.domElement;
     dom.style.cursor = perspective === 'STREET_VIEW' ? 'move' : 'grab';
     dom.addEventListener('pointerdown', onPointerDown);
+    dom.addEventListener('contextmenu', onContextMenu);
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
     dom.addEventListener('wheel', onWheel, { passive: false });
@@ -1054,7 +1509,7 @@ export function LunarSiteMap({
 
         const skyR = 7.2;
         const sAz = (st.sunAzimuthDeg * Math.PI) / 180;
-        const sEl = Math.atan(Math.tan((st.sunElevationDeg * Math.PI) / 180) * 2.4);
+        const sEl = Math.atan(Math.tan((st.sunElevationDeg * Math.PI) / 180) * 2.45);
         const sunPos = new THREE.Vector3(
           Math.sin(sAz) * Math.cos(sEl) * skyR,
           0.22 + Math.sin(sEl) * skyR,
@@ -1062,10 +1517,11 @@ export function LunarSiteMap({
         );
         skySun.position.copy(sunPos);
         sunDirLight.position.copy(sunPos);
-        sunDirLight.intensity = st.sunVisible ? 2.8 : 0.25;
+        sunDirLight.intensity = st.sunVisible ? 3.1 : 0.75;
+        fillHemi.intensity = st.sunVisible ? 1.15 : 0.72;
 
         const eAz = (st.earthAzimuthDeg * Math.PI) / 180;
-        const eEl = Math.atan(Math.tan((st.earthElevationDeg * Math.PI) / 180) * 2.4);
+        const eEl = Math.atan(Math.tan((st.earthElevationDeg * Math.PI) / 180) * 2.45);
         const earthPos = new THREE.Vector3(
           Math.sin(eAz) * Math.cos(eEl) * skyR,
           0.22 + Math.sin(eEl) * skyR,
@@ -1081,21 +1537,21 @@ export function LunarSiteMap({
           const sv = sunPos.clone().project(camera);
           const ev = earthPos.clone().project(camera);
           const headingDeg = (((ctrl.streetYaw * 180) / Math.PI) % 360 + 360) % 360;
+          const ridgeAtHeadingDeg = sampleHorizonDeg(siteRef.current.horizonMaskDeg, headingDeg);
           setSkyBadges({
             sun: { x: (sv.x * 0.5 + 0.5) * w, y: (-sv.y * 0.5 + 0.5) * h - 22, visible: sv.z < 1 },
             earth: { x: (ev.x * 0.5 + 0.5) * w, y: (-ev.y * 0.5 + 0.5) * h - 26, visible: ev.z < 1 },
             headingDeg,
+            ridgeAtHeadingDeg,
           });
         }
       } else {
-        // ORBITAL_SYSTEM: Every transfer trajectory terminates directly AT the Moon
         const epochMs = Date.parse(st.timeUtc) || 0;
         const elapsedMinutes = epochMs / 60000;
         const activeSt = stationRef.current;
         const filter = transferFilterRef.current;
         const hovered = hoveredPathRef.current;
 
-        // Current Moon position on its orbit ring
         const phaseRad = ((st.sunAzimuthDeg + siteRef.current.coordinates.lonDeg) * Math.PI) / 180;
         const moonPos = new THREE.Vector3(
           Math.cos(phaseRad) * orbitRadius,
@@ -1119,7 +1575,7 @@ export function LunarSiteMap({
           const vis = stationVisuals[stId];
           vis.marker.position.copy(pos);
           const isSelected = activeSt === stId;
-          (vis.line.material as THREE.LineBasicMaterial).opacity = isSelected ? 0.95 : 0.24;
+          (vis.line.material as THREE.LineBasicMaterial).opacity = isSelected ? 1.0 : 0.36;
           vis.marker.scale.setScalar(isSelected ? 1.35 : 0.85);
         });
 
@@ -1130,7 +1586,7 @@ export function LunarSiteMap({
           0.11 * Math.sin(gwAngle),
         );
         gatewayMarker.position.copy(gwLocalPos);
-        (gatewayOrbitLine.material as THREE.LineBasicMaterial).opacity = activeSt === 'GATEWAY' ? 1.0 : 0.45;
+        (gatewayOrbitLine.material as THREE.LineBasicMaterial).opacity = activeSt === 'GATEWAY' ? 1.0 : 0.55;
 
         const targetMoonSurfaceWorld = moonPos
           .clone()
@@ -1139,7 +1595,7 @@ export function LunarSiteMap({
         trajectoryLines.forEach((line) => {
           const pid = line.userData.pathId as Exclude<TransferFilter, 'ALL'>;
           const mat = line.material as THREE.LineDashedMaterial;
-          mat.opacity = hovered ? (hovered === pid ? 1.0 : 0.22) : 0.94;
+          mat.opacity = hovered ? (hovered === pid ? 1.0 : 0.28) : 0.98;
         });
 
         if (activeSt === 'GATEWAY') {
@@ -1177,9 +1633,8 @@ export function LunarSiteMap({
         } else {
           const spec = SPACE_STATIONS[activeSt];
           const departR = spec.sceneRadius;
-          const moonArrivalAngle = phaseRad; // Exact angle of the Moon!
+          const moonArrivalAngle = phaseRad;
 
-          // 1. SHORTEST DIRECT TLI (3d 5h): 115° fast prograde arc ending AT the Moon (moonPos)
           const shortSweep = (115 * Math.PI) / 180;
           const shortDepartAz = moonArrivalAngle - shortSweep;
           const shortStart3D = getStationPointAtWorldAzimuth(spec, shortDepartAz);
@@ -1196,7 +1651,6 @@ export function LunarSiteMap({
           }
           updateLinePoints(shortestLine, shortPts);
 
-          // 2. HOHMANN MINIMUM-ENERGY (5d 0h): Exact 180° cotangential Keplerian ellipse ending AT the Moon (moonPos)
           const hohSweep = Math.PI;
           const hohDepartAz = moonArrivalAngle - hohSweep;
           const hohStart3D = getStationPointAtWorldAzimuth(spec, hohDepartAz);
@@ -1206,7 +1660,7 @@ export function LunarSiteMap({
           const hohPts: THREE.Vector3[] = [];
           for (let i = 0; i <= 84; i++) {
             const u = i / 84;
-            const nu = u * Math.PI; // 0 (perigee on station orbit) -> pi (apogee directly at Moon)
+            const nu = u * Math.PI;
             const ang = hohDepartAz + nu;
             const r = (aHoh * (1 - eHoh * eHoh)) / (1 + eHoh * Math.cos(nu));
             const y = hohStart3D.y * (1 - u) + moonPos.y * (u * u);
@@ -1214,7 +1668,6 @@ export function LunarSiteMap({
           }
           updateLinePoints(hohmannLine, hohPts);
 
-          // 3. CIRCUMLUNAR FREE-RETURN (6d 0h): Loops behind the Moon at u=0.5 (moonArrivalAngle) and returns to Earth
           const frHalfSweep = (155 * Math.PI) / 180;
           const frDepartAz = moonArrivalAngle - frHalfSweep;
           const frStart3D = getStationPointAtWorldAzimuth(spec, frDepartAz);
@@ -1222,7 +1675,7 @@ export function LunarSiteMap({
 
           const frPts: THREE.Vector3[] = [];
           for (let i = 0; i <= 104; i++) {
-            const u = i / 104; // u=0.5 passes directly behind the Moon's far side!
+            const u = i / 104;
             const halfSin = Math.sin(Math.PI * u);
             const r = departR + (orbitRadius + 0.34 - departR) * (halfSin * halfSin);
             const ang =
@@ -1235,7 +1688,6 @@ export function LunarSiteMap({
           }
           updateLinePoints(freeReturnLine, frPts);
 
-          // 4. BALLISTIC LUNAR TRANSFER / WSB (95d 0h): Deep cislunar arc out to 1.45x Moon radius, capturing AT the Moon
           const wsbSweep = (235 * Math.PI) / 180;
           const wsbDepartAz = moonArrivalAngle - wsbSweep;
           const wsbStart3D = getStationPointAtWorldAzimuth(spec, wsbDepartAz);
@@ -1288,13 +1740,19 @@ export function LunarSiteMap({
 
     return () => {
       cancelAnimationFrame(frameId);
+      cancelInitialTrek();
       dom.removeEventListener('pointerdown', onPointerDown);
+      dom.removeEventListener('contextmenu', onContextMenu);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
       dom.removeEventListener('wheel', onWheel);
       window.removeEventListener('resize', onResize);
       sceneObjectsRef.current.pinsGroup = null;
+      sceneObjectsRef.current.polarDteMesh = null;
+      sceneObjectsRef.current.polarDteRing = null;
       sceneObjectsRef.current.surfaceTerrain = null;
+      sceneObjectsRef.current.terrainWireframe = null;
+      sceneObjectsRef.current.horizonCrestLine = null;
       renderer.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1309,8 +1767,40 @@ export function LunarSiteMap({
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <div ref={mountRef} style={{ width: '100%', height: '100%' }} />
 
-      {/* ASU Quickmap Link Overlay */}
-      <div style={{ position: 'absolute', top: 10, right: 10, zIndex: 15, display: 'flex', gap: 6 }}>
+      {/* Top-Right Controls: South-Polar Earth-Visibility Map Toggle (Globe) + Quickmap Link */}
+      <div
+        style={{
+          position: 'absolute',
+          top: compact ? 10 : 68,
+          right: 14,
+          zIndex: 18,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          flexWrap: 'wrap',
+        }}
+      >
+        {perspective === 'GLOBE' && (
+          <button
+            type="button"
+            onClick={() => setShowPolarDteOverlay((v) => !v)}
+            title="Toggle South-Polar Earth-Visibility (DTE) & PSR Heatmap Overlay (80°S–90°S)"
+            style={{
+              background: showPolarDteOverlay ? 'rgba(22, 163, 74, 0.92)' : 'rgba(15, 23, 42, 0.9)',
+              color: showPolarDteOverlay ? '#ffffff' : '#4ade80',
+              border: `1px solid ${showPolarDteOverlay ? '#86efac' : '#334155'}`,
+              borderRadius: 6,
+              padding: '4px 10px',
+              fontSize: 10,
+              fontWeight: 800,
+              cursor: 'pointer',
+              boxShadow: '0 4px 14px rgba(0, 0, 0, 0.5)',
+            }}
+          >
+            🌐 {showPolarDteOverlay ? 'Polar DTE Map: ON' : 'Polar DTE Map (80–90°S)'}
+          </button>
+        )}
+
         <a
           href={`https://quickmap.lroc.asu.edu/?lat=${selectedSite.coordinates.latDeg}&lon=${selectedSite.coordinates.lonDeg}&zoom=9`}
           target="_blank"
@@ -1330,26 +1820,90 @@ export function LunarSiteMap({
         </a>
       </div>
 
+      {/* South-Polar Earth-Visibility (DTE) Legend Card when Overlay is Active */}
+      {perspective === 'GLOBE' && showPolarDteOverlay && !compact && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 96,
+            right: 14,
+            zIndex: 18,
+            background: 'rgba(9, 15, 29, 0.92)',
+            backdropFilter: 'blur(10px)',
+            border: '1px solid #334155',
+            borderRadius: 10,
+            padding: '8px 11px',
+            fontSize: 10,
+            color: '#e2e8f0',
+            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.7)',
+          }}
+        >
+          <div style={{ fontWeight: 800, color: '#4ade80', marginBottom: 5, letterSpacing: '0.04em' }}>
+            🌍 SOUTH-POLAR DTE MAP (80–90°S)
+          </div>
+          <div style={{ display: 'grid', gap: 3 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ width: 10, height: 10, borderRadius: 2, background: '#14c76b', display: 'inline-block' }} />
+              <span>&gt;78% DTE (High-uptime polar ridge)</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ width: 10, height: 10, borderRadius: 2, background: '#0fa6eb', display: 'inline-block' }} />
+              <span>45–78% DTE (Seasonal line-of-sight)</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ width: 10, height: 10, borderRadius: 2, background: '#eb9e0f', display: 'inline-block' }} />
+              <span>8–45% DTE (Libration-dependent)</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ width: 10, height: 10, borderRadius: 2, background: '#db2433', display: 'inline-block' }} />
+              <span>0% DTE / PSR (Relay required)</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* STREET VIEW OVERLAY */}
       {perspective === 'STREET_VIEW' && (
         <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden' }}>
           <div
             style={{
               position: 'absolute',
-              top: compact ? 10 : 104,
+              top: compact ? 10 : 124,
               left: compact ? 10 : '50%',
               transform: compact ? 'none' : 'translateX(-50%)',
-              background: 'rgba(15, 23, 42, 0.85)',
+              background: 'rgba(15, 23, 42, 0.88)',
               border: '1px solid #334155',
               borderRadius: 20,
-              padding: compact ? '4px 10px' : '4px 14px',
+              padding: compact ? '4px 10px' : '5px 14px',
               fontSize: compact ? 10 : 11,
               fontWeight: 800,
               color: '#38bdf8',
+              whiteSpace: 'nowrap',
             }}
           >
-            🧭 {Math.round(skyBadges.headingDeg)}° {compact ? '' : '· Drag to look 360° around horizon'}
+            🧭 {getCardinalDirection(skyBadges.headingDeg)} ({Math.round(skyBadges.headingDeg)}°) · Ridge El{' '}
+            {skyBadges.ridgeAtHeadingDeg.toFixed(1)}°
+            {compact ? '' : ` · Slope ${(selectedSite.slopeDeg ?? 0).toFixed(1)}°`}
           </div>
+
+          {!compact && (
+            <div
+              style={{
+                position: 'absolute',
+                bottom: 94,
+                right: 14,
+                background: 'rgba(9, 15, 29, 0.86)',
+                border: '1px solid #1e293b',
+                borderRadius: 8,
+                padding: '4px 9px',
+                fontSize: 9.5,
+                fontWeight: 700,
+                color: '#94a3b8',
+              }}
+            >
+              🗺️ Terrain: {terrainSourceLabel}
+            </div>
+          )}
 
           {skyBadges.sun.visible && (
             <div

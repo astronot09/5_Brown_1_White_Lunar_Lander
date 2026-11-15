@@ -27,6 +27,59 @@ type DepartureOrbitalId = 'ISS' | 'TIANGONG' | 'HLS_DEPOT' | 'GATEWAY';
 
 const LUNAR_RADIUS_KM = 1737.4;
 
+const TABLE_13_REFERENCE_SITES: {
+  siteId: string;
+  name: string;
+  program: MissionProgram;
+  latDeg: number;
+  lonDeg: number;
+  landingTimeUtc?: string;
+  source: string;
+}[] = [
+  { siteId: 'apollo_11', name: 'Apollo 11 (Tranquility Base)', program: 'APOLLO', latDeg: 0.67416, lonDeg: 23.47314, landingTimeUtc: '1969-07-20T20:17:40Z', source: 'LROC / NSSDC' },
+  { siteId: 'apollo_12', name: 'Apollo 12 (Oceanus Procellarum)', program: 'APOLLO', latDeg: -3.0128, lonDeg: 336.5781, landingTimeUtc: '1969-11-19T06:54:35Z', source: 'NSSDC' },
+  { siteId: 'apollo_14', name: 'Apollo 14 (Fra Mauro)', program: 'APOLLO', latDeg: -3.64589, lonDeg: 342.52806, landingTimeUtc: '1971-02-05T09:18:11Z', source: 'NSSDC' },
+  { siteId: 'apollo_15', name: 'Apollo 15 (Hadley–Apennine)', program: 'APOLLO', latDeg: 3.6333, lonDeg: 26.13239, landingTimeUtc: '1971-07-30T22:16:29Z', source: 'NSSDC' },
+  { siteId: 'apollo_16', name: 'Apollo 16 (Descartes Highlands)', program: 'APOLLO', latDeg: -8.973, lonDeg: 15.5002, landingTimeUtc: '1972-04-21T02:23:35Z', source: 'NSSDC' },
+  { siteId: 'apollo_17', name: 'Apollo 17 (Taurus–Littrow)', program: 'APOLLO', latDeg: 20.1911, lonDeg: 30.7723, landingTimeUtc: '1972-12-11T19:54:58Z', source: 'NSSDC' },
+  { siteId: 'chandrayaan_3', name: 'Chandrayaan-3 (Statio Shiv Shakti)', program: 'INTERNATIONAL', latDeg: -69.373, lonDeg: 32.319, landingTimeUtc: '2023-08-23T12:33:00Z', source: 'ISRO / IAU' },
+  { siteId: 'jaxa_slim', name: 'SLIM (Shioli Crater Rim)', program: 'INTERNATIONAL', latDeg: -13.316, lonDeg: 25.251, landingTimeUtc: '2024-01-19T15:20:00Z', source: 'JAXA' },
+  { siteId: 'im1_odysseus', name: 'IM-1 Odysseus (Malapert A)', program: 'CLPS', latDeg: -80.13, lonDeg: 1.44, landingTimeUtc: '2024-02-22T23:23:53Z', source: 'LROC' },
+  { siteId: 'im2_athena', name: 'IM-2 Athena (Mons Mouton)', program: 'CLPS', latDeg: -84.7906, lonDeg: 29.1957, landingTimeUtc: '2025-03-06T17:28:50Z', source: 'LROC' },
+  { siteId: 'blue_ghost_m1', name: 'Blue Ghost Mission 1 (Mare Crisium)', program: 'CLPS', latDeg: 18.5623, lonDeg: 61.8103, landingTimeUtc: '2025-03-02T08:34:00Z', source: 'LROC' },
+  { siteId: 'change_3', name: "Chang'e 3 (Mare Imbrium)", program: 'INTERNATIONAL', latDeg: 44.1214, lonDeg: 340.4884, landingTimeUtc: '2013-12-14T13:11:18Z', source: 'LROC' },
+  { siteId: 'change_4', name: "Chang'e 4 (Von Kármán Far Side)", program: 'INTERNATIONAL', latDeg: -45.4446, lonDeg: 177.5991, landingTimeUtc: '2019-01-03T02:26:00Z', source: 'CNSA / LROC' },
+  { siteId: 'change_5', name: "Chang'e 5 (Mons Rümker)", program: 'INTERNATIONAL', latDeg: 43.0576, lonDeg: 308.0839, landingTimeUtc: '2020-12-01T15:11:00Z', source: 'LROC' },
+  { siteId: 'change_6', name: "Chang'e 6 (Apollo Basin Far Side)", program: 'INTERNATIONAL', latDeg: -41.6385, lonDeg: 206.0148, landingTimeUtc: '2024-06-01T22:23:16Z', source: 'LROC' },
+  { siteId: 'hakuto_r_m1', name: 'HAKUTO-R M1 (Atlas Crater)', program: 'INTERNATIONAL', latDeg: 44.094, lonDeg: 47.581, source: 'LROC' },
+  { siteId: 'hakuto_r_m2', name: 'HAKUTO-R M2 (Mare Frigoris)', program: 'INTERNATIONAL', latDeg: 60.4445, lonDeg: 355.412, source: 'LROC' },
+  { siteId: 'bussey_point_d', name: 'Bussey Point D (Shackleton Rim)', program: 'ARTEMIS', latDeg: -88.79, lonDeg: 124.5, source: 'Bussey et al. 2010' },
+];
+
+function buildMergedSiteCatalogue(): CuratedLunarSite[] {
+  const merged = [...CURATED_SITES];
+  for (const spec of TABLE_13_REFERENCE_SITES) {
+    const exists = merged.some(
+      (s) =>
+        s.siteId === spec.siteId ||
+        (Math.abs(s.coordinates.latDeg - spec.latDeg) < 0.05 &&
+          Math.abs(s.coordinates.lonDeg - spec.lonDeg) < 0.05),
+    );
+    if (!exists) {
+      const base = buildCustomSite(spec.latDeg, spec.lonDeg, 0);
+      merged.push({
+        ...base,
+        siteId: spec.siteId,
+        name: spec.name,
+        program: spec.program,
+        landingTimeUtc: spec.landingTimeUtc,
+        demSource: `${spec.source} · LOLA / SLDEM2015`,
+      });
+    }
+  }
+  return merged;
+}
+
 interface ControlReplayPreset {
   id: string;
   badge: string;
@@ -148,11 +201,7 @@ function formatUtcShort(ms: number): string {
   return `${day} ${mon} ${yr} ${hh}:${mm} UTC`;
 }
 
-/**
- * Computes Lunar Local Solar Time (00:00 - 24:00 LLT) from topocentric solar azimuth
- */
 function formatLunarLocalTime(sunAzimuthDeg: number): string {
-  // Solar noon is at Az 0° (Northern hemisphere) or Az 180° (Southern hemisphere)
   const wrappedAz = ((sunAzimuthDeg % 360) + 360) % 360;
   const lunarHour = ((wrappedAz / 360) * 24 + 12) % 24;
   const hh = Math.floor(lunarHour);
@@ -230,7 +279,6 @@ function computeSiteDiagnostics(
       ? 0
       : -((Math.acos(LUNAR_RADIUS_KM / (LUNAR_RADIUS_KM + mastHeightM / 1000)) * 180) / Math.PI);
 
-  // Current occluder ridge diagnostics
   const sunHorizonElDeg = sampleHorizonMaskDeg(mask, currentState.sunAzimuthDeg);
   const sunClearanceDeg = currentState.sunElevationDeg - sunHorizonElDeg;
   const sunOccluderText = currentState.sunVisible
@@ -246,7 +294,6 @@ function computeSiteDiagnostics(
         ? `Partial disk grazing ridge at Az ${currentState.earthAzimuthDeg.toFixed(1)}° (${earthClearanceDeg.toFixed(2)}° < 1.0° full-disk margin)`
         : `Occulted behind terrain ridge at Az ${currentState.earthAzimuthDeg.toFixed(1)}° (Ridge El ${earthHorizonElDeg.toFixed(2)}°, ${earthClearanceDeg.toFixed(2)}°)`;
 
-  // Joint Operations Window (both Sun visible AND Earth DTE available) + Chronological Text Event List
   let opsCount = 0;
   let currentStreak = 0;
   let maxStreak = 0;
@@ -333,7 +380,7 @@ function computeSiteDiagnostics(
           lltStr,
           type: 'OPS_START',
           azimuthDeg: st.sunAzimuthDeg,
-          ridgeElDeg: rElOrZero(mask, st.sunAzimuthDeg),
+          ridgeElDeg: sampleHorizonMaskDeg(mask, st.sunAzimuthDeg),
           note: 'Simultaneous solar power + Earth DTE window opened',
         });
       } else if (prevOps && !opsNow) {
@@ -344,7 +391,7 @@ function computeSiteDiagnostics(
           lltStr,
           type: 'OPS_END',
           azimuthDeg: st.sunAzimuthDeg,
-          ridgeElDeg: rElOrZero(mask, st.sunAzimuthDeg),
+          ridgeElDeg: sampleHorizonMaskDeg(mask, st.sunAzimuthDeg),
           note: 'Joint power + DTE operations window closed',
         });
       }
@@ -356,11 +403,9 @@ function computeSiteDiagnostics(
   const opsWindowHours = opsCount * stepHours;
   const longestOpsStreakHours = maxStreak * stepHours;
 
-  // P5–P95 Clone DEM & 50m/200m Landing Ellipse Uncertainty Envelope
-  // Polar sensitivity scales as 1 / cos(lat) because solar elevation changes ~0.005°/hr at 89.5°S
   const cosLat = Math.max(0.14, Math.cos((site.coordinates.latDeg * Math.PI) / 180));
   const polarAmplifier = clamp(0.18 / cosLat, 0.35, 2.6);
-  const horizonUncertaintyDeg = 0.14; // PGDA 5m LOLA clone + 200m landing ellipse vertical uncertainty
+  const horizonUncertaintyDeg = 0.14;
 
   let p95SunCount = 0;
   let p5SunCount = 0;
@@ -382,7 +427,6 @@ function computeSiteDiagnostics(
   const dteP95Pct = Number(((p95DteCount / totalSamples) * 100).toFixed(1));
   const dteP5Pct = Number(((p5DteCount / totalSamples) * 100).toFixed(1));
 
-  // Event timing spread (hours): 0.14° / (0.5°/hr * cosLat) -> ~12 min at equator, ~6-16h at poles
   const eventSpreadHours = Number(clamp(horizonUncertaintyDeg * 18 * polarAmplifier, 0.4, 24).toFixed(1));
   const lowConfidenceFlag = eventSpreadHours > 12;
 
@@ -405,10 +449,6 @@ function computeSiteDiagnostics(
     lowConfidenceFlag,
     events,
   };
-}
-
-function rElOrZero(mask: number[] | undefined, az: number): number {
-  return sampleHorizonMaskDeg(mask, az);
 }
 
 interface NormalizedBadge {
@@ -557,7 +597,7 @@ function computeMissionProbability(
   windowDays: number,
   stationId: DepartureOrbitalId,
 ): ProbabilityBreakdown {
-  const isKnownLocation = site.program !== 'CUSTOM' && !site.siteId.startsWith('custom_');
+  const isKnownLocation = !site.siteId.startsWith('custom_');
   const slopeDeg = site.slopeDeg ?? 4.5;
   const totalMissionHours = windowDays * 24;
   const sunlitHours = (metrics.illuminationPct / 100) * totalMissionHours;
@@ -1021,7 +1061,7 @@ function HomeLandingView({
                 htmlFor="hero-site-select"
                 style={{ display: 'block', fontSize: 10, fontWeight: 800, color: '#94a3b8', marginBottom: 5 }}
               >
-                SELECT STAGING SITE:
+                SELECT STAGING SITE ({sites.length} AVAILABLE):
               </label>
               <select
                 id="hero-site-select"
@@ -1042,7 +1082,7 @@ function HomeLandingView({
                   cursor: 'pointer',
                 }}
               >
-                {sites.slice(0, 12).map((s) => (
+                {sites.map((s) => (
                   <option key={s.siteId} value={s.siteId}>
                     [{s.program}] {s.name} ({s.coordinates.latDeg.toFixed(1)}°, {s.coordinates.lonDeg.toFixed(1)}°E)
                   </option>
@@ -1158,10 +1198,10 @@ function HomeLandingView({
                 vectors.
               </p>
               <ul style={cleanBulletList}>
-                <li>• Curated Artemis, Apollo, CLPS &amp; CSA landing sites</li>
-                <li>• 3D Moon Globe &amp; 360° Surface Street View</li>
+                <li>• All 18 Table 13 Apollo, CLPS, Artemis &amp; international sites</li>
+                <li>• South-Polar DTE Map (80–90°S) &amp; 3D Surface Street View</li>
                 <li>• 4-tier control validation, P5–P95 bands &amp; exports</li>
-                <li>• Custom MEAN_ME coordinate pin placement</li>
+                <li>• Custom MEAN_ME pin drop &amp; right-click removal</li>
               </ul>
             </div>
 
@@ -1178,7 +1218,7 @@ function HomeLandingView({
                 <li>• ISS, Tiangong, HLS Depot, Axiom, Haven-1 &amp; Gateway</li>
                 <li>• Shortest TLI, Hohmann, Free-Return &amp; WSB trajectories</li>
                 <li>• Interactive hover readouts on 3D transfer arcs</li>
-                <li>• Side-by-side Split-Screen Scenario Evaluator</li>
+                <li>• 6-Scenario Split-Screen Trade-Off Evaluator</li>
               </ul>
             </div>
 
@@ -1384,22 +1424,38 @@ export function App() {
   const [activeTab, setActiveTab] = useState<MainTab>('HOME');
 
   const [allSites, setAllSites] = useState<CuratedLunarSite[]>(() => {
+    const baseCatalogue = buildMergedSiteCatalogue();
     const qLat = Number(initialQuery.get('lat'));
     const qLon = Number(initialQuery.get('lon'));
     if (initialQuery.has('lat') && initialQuery.has('lon') && Number.isFinite(qLat) && Number.isFinite(qLon)) {
-      const custom = buildCustomSite(clamp(qLat, -90, 90), ((qLon % 360) + 360) % 360, 0);
-      return [custom, ...CURATED_SITES];
+      const normLat = clamp(qLat, -90, 90);
+      const normLon = ((qLon % 360) + 360) % 360;
+      const alreadyInCatalogue = baseCatalogue.some(
+        (s) =>
+          Math.abs(s.coordinates.latDeg - normLat) < 0.02 &&
+          Math.abs(s.coordinates.lonDeg - normLon) < 0.02,
+      );
+      if (!alreadyInCatalogue) {
+        const custom = buildCustomSite(normLat, normLon, 0);
+        return [custom, ...baseCatalogue];
+      }
     }
-    return CURATED_SITES;
+    return baseCatalogue;
   });
 
   const [selectedSiteId, setSelectedSiteId] = useState<string>(() => {
+    const baseCatalogue = buildMergedSiteCatalogue();
     const qSite = initialQuery.get('site');
-    if (qSite && CURATED_SITES.some((s) => s.siteId === qSite)) return qSite;
+    if (qSite && baseCatalogue.some((s) => s.siteId === qSite)) return qSite;
     if (initialQuery.has('lat') && initialQuery.has('lon')) {
       const qLat = clamp(Number(initialQuery.get('lat')), -90, 90);
       const qLon = ((Number(initialQuery.get('lon')) % 360) + 360) % 360;
-      return buildCustomSite(qLat, qLon, 0).siteId;
+      const match = baseCatalogue.find(
+        (s) =>
+          Math.abs(s.coordinates.latDeg - qLat) < 0.02 &&
+          Math.abs(s.coordinates.lonDeg - qLon) < 0.02,
+      );
+      return match ? match.siteId : buildCustomSite(qLat, qLon, 0).siteId;
     }
     return 'shackleton_rim_01';
   });
@@ -1447,7 +1503,6 @@ export function App() {
     [allSites, selectedSiteId],
   );
 
-  // Sync shareable parameters to URL query string without reloading
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams();
@@ -1502,7 +1557,6 @@ export function App() {
     [selectedSite, report.states, currentState, report.metrics, stepHours, mastHeightM],
   );
 
-  // Position (±100m, ±200m, ±500m) and Date (±1d, ±3d, ±7d) Sensitivity Chips
   const sensitivityChips = useMemo(() => {
     const degPerMeter = 180 / (Math.PI * LUNAR_RADIUS_KM * 1000);
     const posOffsetsM = [100, 200, 500];
@@ -1605,6 +1659,41 @@ export function App() {
     setSelectedSiteId(custom.siteId);
     setCustomLat(latDeg.toFixed(2));
     setCustomLon(lonDeg.toFixed(2));
+  };
+
+  const handleDeleteCustomPin = (siteIdToDelete: string) => {
+    setAllSites((prev) => {
+      const next = prev.filter((s) => s.siteId !== siteIdToDelete);
+      if (selectedSiteId === siteIdToDelete) {
+        setSelectedSiteId(next[0]?.siteId ?? 'shackleton_rim_01');
+      }
+      return next;
+    });
+
+    try {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (!key) continue;
+        if (key.includes(siteIdToDelete)) {
+          localStorage.removeItem(key);
+          continue;
+        }
+        const raw = localStorage.getItem(key);
+        if (raw && raw.includes(siteIdToDelete)) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            localStorage.setItem(
+              key,
+              JSON.stringify(
+                parsed.filter((item: any) => item?.siteId !== siteIdToDelete && item?.id !== siteIdToDelete),
+              ),
+            );
+          }
+        }
+      }
+    } catch {
+      // Ignore storage access errors
+    }
   };
 
   const handleLoadControlReplay = (ctrl: ControlReplayPreset) => {
@@ -1982,6 +2071,7 @@ export function App() {
               perspective={perspective}
               onSelectSite={handleSelectSite}
               onDropCustomPin={handleDropCustomPin}
+              onDeleteCustomPin={handleDeleteCustomPin}
             />
           </div>
 
@@ -2235,8 +2325,22 @@ export function App() {
                 {activePopup === 'SITES' && (
                   <div style={{ display: 'grid', gap: 14 }}>
                     <div style={{ background: '#060a14', border: '1px solid #1e293b', borderRadius: 12, padding: 12 }}>
-                      <div style={{ fontSize: 11, fontWeight: 800, color: '#38bdf8', marginBottom: 8 }}>
-                        CUSTOM LUNAR COORDINATES (MEAN_ME FRAME)
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
+                          gap: 6,
+                          marginBottom: 8,
+                        }}
+                      >
+                        <span style={{ fontSize: 11, fontWeight: 800, color: '#38bdf8' }}>
+                          CUSTOM LUNAR COORDINATES (MEAN_ME FRAME)
+                        </span>
+                        <span style={{ fontSize: 10, color: '#94a3b8' }}>
+                          Right-click any custom pin on the Moon or below to delete it
+                        </span>
                       </div>
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <input
@@ -2299,39 +2403,58 @@ export function App() {
                     </div>
 
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 10 }}>
-                      {filteredSites.map((s) => (
-                        <button
-                          key={s.siteId}
-                          type="button"
-                          onClick={() => {
-                            handleSelectSite(s);
-                            setActivePopup('NONE');
-                          }}
-                          style={{
-                            textAlign: 'left',
-                            background: s.siteId === selectedSite.siteId ? 'rgba(56, 189, 248, 0.16)' : '#060a14',
-                            border: s.siteId === selectedSite.siteId ? '1px solid #38bdf8' : '1px solid #1e293b',
-                            borderRadius: 10,
-                            padding: 10,
-                            color: '#f8fafc',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          <div style={{ fontSize: 10, fontWeight: 800, color: '#38bdf8' }}>{s.program}</div>
-                          <div style={{ fontSize: 12.5, fontWeight: 800, marginTop: 2 }}>{s.name}</div>
-                          <div style={{ fontSize: 10.5, color: '#94a3b8', marginTop: 3 }}>
-                            {s.coordinates.latDeg.toFixed(2)}°, {s.coordinates.lonDeg.toFixed(2)}°E · Alt{' '}
-                            {s.coordinates.elevationM}m
-                          </div>
-                        </button>
-                      ))}
+                      {filteredSites.map((s) => {
+                        const isCustom = s.siteId.startsWith('custom_');
+                        return (
+                          <button
+                            key={s.siteId}
+                            type="button"
+                            onClick={() => {
+                              handleSelectSite(s);
+                              setActivePopup('NONE');
+                            }}
+                            onContextMenu={(e) => {
+                              if (isCustom) {
+                                e.preventDefault();
+                                handleDeleteCustomPin(s.siteId);
+                              }
+                            }}
+                            title={isCustom ? 'Click to select · Right-click to delete custom pin' : s.name}
+                            style={{
+                              textAlign: 'left',
+                              background: s.siteId === selectedSite.siteId ? 'rgba(56, 189, 248, 0.16)' : '#060a14',
+                              border:
+                                s.siteId === selectedSite.siteId
+                                  ? '1px solid #38bdf8'
+                                  : isCustom
+                                    ? '1px solid rgba(244, 114, 182, 0.45)'
+                                    : '1px solid #1e293b',
+                              borderRadius: 10,
+                              padding: 10,
+                              color: '#f8fafc',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, fontWeight: 800 }}>
+                              <span style={{ color: isCustom ? '#f472b6' : '#38bdf8' }}>
+                                {isCustom ? 'CUSTOM PIN' : s.program}
+                              </span>
+                              {isCustom && <span style={{ color: '#94a3b8' }}>Right-click to remove</span>}
+                            </div>
+                            <div style={{ fontSize: 12.5, fontWeight: 800, marginTop: 2 }}>{s.name}</div>
+                            <div style={{ fontSize: 10.5, color: '#94a3b8', marginTop: 3 }}>
+                              {s.coordinates.latDeg.toFixed(2)}°, {s.coordinates.lonDeg.toFixed(2)}°E · Alt{' '}
+                              {s.coordinates.elevationM}m
+                            </div>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
 
                 {activePopup === 'TECH_GRAPHS' && (
                   <div style={{ display: 'grid', gap: 14 }}>
-                    {/* 1. Mast Heights (0m, 2m, 10m) + Array Preset + Report Export & Share Bar */}
                     <div
                       style={{
                         display: 'flex',
@@ -2402,7 +2525,6 @@ export function App() {
                       </div>
                     </div>
 
-                    {/* 2. Summary Metrics Strip with P5–P95 Uncertainty Envelopes & Joint Operations Window */}
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))', gap: 10 }}>
                       <div style={statBox}>
                         <span style={{ fontSize: 10, color: '#94a3b8' }}>SUNLIT DURATION</span>
@@ -2453,7 +2575,6 @@ export function App() {
                       </div>
                     </div>
 
-                    {/* 3. Live Occluder Ridge Diagnostics (Why Sun/Earth is Visible or Blocked) */}
                     <div
                       style={{
                         background: '#060a14',
@@ -2480,7 +2601,6 @@ export function App() {
                       </div>
                     </div>
 
-                    {/* 4. Position (±100/200/500m) & Date (±1/3/7d) Sensitivity Chips */}
                     <div
                       style={{
                         background: '#060a14',
@@ -2546,7 +2666,6 @@ export function App() {
                       </div>
                     </div>
 
-                    {/* 5. Diagnostic Charts Wrapper (Captured by PNG Exporter) */}
                     <div ref={techChartsWrapperRef} style={{ display: 'grid', gap: 14 }}>
                       <div>
                         <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>
@@ -2582,7 +2701,6 @@ export function App() {
                       </div>
                     </div>
 
-                    {/* 6. Chronological Text Event List (Accessible Alternative to Charts) */}
                     <div
                       style={{
                         background: '#060a14',
@@ -2656,7 +2774,6 @@ export function App() {
                       )}
                     </div>
 
-                    {/* 7. VALIDATION & CONTROL REPLAYS PANEL (V0–V4) */}
                     <div
                       style={{
                         background: '#060a14',
@@ -2834,7 +2951,6 @@ export function App() {
                   </div>
                 )}
 
-                {/* DETERMINISTIC MISSION SUCCESS PROBABILITY DASHBOARD */}
                 {activePopup === 'MISSION_PROB' && (
                   <div style={{ display: 'grid', gap: 14 }}>
                     <div
@@ -3006,7 +3122,6 @@ export function App() {
                       ))}
                     </div>
 
-                    {/* BOTTOM OVERALL PROBABILITY OF SUCCESS GAUGE */}
                     <div
                       style={{
                         background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.96), rgba(6, 10, 20, 0.98))',
@@ -3281,7 +3396,7 @@ const cleanBulletList: React.CSSProperties = {
 
 const topHeaderContainerStyle: React.CSSProperties = {
   position: 'absolute',
-  top: 68,
+  top: 66,
   left: '50%',
   transform: 'translateX(-50%)',
   zIndex: 15,
@@ -3289,23 +3404,25 @@ const topHeaderContainerStyle: React.CSSProperties = {
   flexDirection: 'column',
   alignItems: 'center',
   gap: 8,
-  width: 'min(92vw, 760px)',
+  width: 'min(96vw, 940px)',
   pointerEvents: 'none',
 };
 
 const telemetryPillStyle: React.CSSProperties = {
   pointerEvents: 'auto',
-  background: 'rgba(15, 23, 42, 0.86)',
+  background: 'rgba(15, 23, 42, 0.88)',
   backdropFilter: 'blur(12px)',
   border: '1px solid #334155',
   borderRadius: 999,
-  padding: '7px 18px',
+  padding: '6px 15px',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   flexWrap: 'wrap',
-  gap: 14,
-  fontSize: 12,
+  gap: 12,
+  fontSize: 11.5,
+  maxWidth: '100%',
+  boxSizing: 'border-box',
   boxShadow: '0 8px 30px rgba(0, 0, 0, 0.6)',
 };
 
