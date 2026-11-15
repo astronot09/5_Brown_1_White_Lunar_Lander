@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import type { EarthMoonTransferPlan } from '../../lib/orbit';
-import { lunarCoordinatesToUnitVector } from '../../../../packages/lunar-core/src/lunarCoordinates';
+import { lunarCoordinatesToUnitVector } from '../../../../../packages/lunar-core/src/lunarCoordinates';
 
 interface EarthMoonTransferProps {
   plan: EarthMoonTransferPlan;
