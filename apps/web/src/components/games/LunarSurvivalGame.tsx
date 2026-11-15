@@ -9,6 +9,8 @@ interface EnvConfig {
   id: EnvironmentId;
   label: string;
   gravity: number; // m/s^2
+  maxThrustN: number; // N (sized per planetary gravity for ~2.25 TWR)
+  rcsLatThrustN: number; // N
   atmoDensity: number; // kg/m^3
   dragArea: number; // m^2
   skyTop: string;
@@ -17,7 +19,6 @@ interface EnvConfig {
   ridgeFill: string;
   horizonStroke: string;
   dustRgb: string;
-  ambientLight: number; // 0..1
 }
 
 const ENVIRONMENTS: Record<EnvironmentId, EnvConfig> = {
@@ -25,6 +26,8 @@ const ENVIRONMENTS: Record<EnvironmentId, EnvConfig> = {
     id: 'MOON',
     label: 'MOON · Mare Tranquillitatis (Vacuum)',
     gravity: 1.62,
+    maxThrustN: 19500,
+    rcsLatThrustN: 4600,
     atmoDensity: 0,
     dragArea: 0,
     skyTop: '#02040a',
@@ -33,12 +36,13 @@ const ENVIRONMENTS: Record<EnvironmentId, EnvConfig> = {
     ridgeFill: '#0f172a',
     horizonStroke: '#64748b',
     dustRgb: '203, 213, 225',
-    ambientLight: 0.38,
   },
   MARS: {
     id: 'MARS',
     label: 'MARS · Jezero Crater (Thin CO₂ Atmo)',
     gravity: 3.72,
+    maxThrustN: 43500,
+    rcsLatThrustN: 6800,
     atmoDensity: 0.02,
     dragArea: 11.5,
     skyTop: '#1c0f0a',
@@ -47,14 +51,11 @@ const ENVIRONMENTS: Record<EnvironmentId, EnvConfig> = {
     ridgeFill: '#3b160b',
     horizonStroke: '#c26d4a',
     dustRgb: '234, 158, 108',
-    ambientLight: 0.62,
   },
 };
 
 const DRY_MASS_KG = 4000;
 const INITIAL_FUEL_KG = 1200;
-const MAX_THRUST_N = 19500;
-const RCS_LAT_THRUST_N = 4600;
 const FUEL_BURN_RATE = 5.8; // kg/s at 100% thrust
 const SUB_DT = 0.005; // 200 Hz fixed physics integration step
 
@@ -83,12 +84,12 @@ function formatMissionTime(sec: number): string {
   return `T+${String(m).padStart(2, '0')}:${s.toFixed(1).padStart(4, '0')}`;
 }
 
-// Singleton AudioContext so repeated sound effects never leak audio hardware nodes
 let sharedAudioCtx: AudioContext | null = null;
 function playSoundEffect(type: 'gear' | 'ring' | 'win' | 'crash' | 'warn', muted: boolean) {
   if (muted) return;
   try {
-    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const AudioCtx =
+      window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtx) return;
     if (!sharedAudioCtx) {
       sharedAudioCtx = new AudioCtx();
@@ -150,12 +151,8 @@ function playSoundEffect(type: 'gear' | 'ring' | 'win' | 'crash' | 'warn', muted
   }
 }
 
-/**
- * Procedural crater terrain heightmap (meters relative to pad datum)
- */
 function getTerrainHeight(wx: number, padSlopeDeg: number): number {
   const slopeRad = (padSlopeDeg * Math.PI) / 180;
-  // Flat-ish sloped landing pad between -48m and +48m
   if (Math.abs(wx) <= 48) {
     return wx * Math.tan(slopeRad);
   }
@@ -175,9 +172,6 @@ function getTerrainSlopeDeg(wx: number, padSlopeDeg: number): number {
   return (Math.atan2(h2 - h1, 3.0) * 180) / Math.PI;
 }
 
-/**
- * Articulated Humanoid Assistant Avatar ("LUNA")
- */
 function LunaHumanoidAvatar({
   pose,
   speaking,
@@ -251,18 +245,13 @@ function LunaHumanoidAvatar({
       </div>
 
       <svg width="106" height="122" viewBox="0 0 110 128" fill="none">
-        {/* EVA Backpack */}
         <rect x="30" y="54" width="50" height="36" rx="9" fill="#1e293b" stroke="#475569" strokeWidth="1.5" />
-        {/* Comms Antenna */}
         <line x1="55" y1="8" x2="55" y2="18" stroke={accent} strokeWidth="2.2" strokeLinecap="round" />
         <circle cx="55" cy="7" r="3.5" fill={accent} />
 
-        {/* Helmet */}
         <rect x="31" y="17" width="48" height="38" rx="18" fill="#f8fafc" stroke="#94a3b8" strokeWidth="1.6" />
-        {/* Visor */}
         <rect x="37" y="24" width="36" height="23" rx="11" fill="#060a14" stroke={accent} strokeWidth="1.5" />
 
-        {/* Eyes or Static */}
         {blackout ? (
           <text x="55" y="39" textAnchor="middle" fill="#64748b" fontSize="9" fontFamily="monospace" fontWeight="bold">
             NO SIG
@@ -279,7 +268,6 @@ function LunaHumanoidAvatar({
           </>
         )}
 
-        {/* Voice Waveform Bars inside Visor */}
         {!blackout && (
           <g opacity={speaking ? 0.95 : 0.35}>
             <rect x="47" y={speaking ? 40 : 42} width="2.5" height={speaking ? 4 : 2} rx="1" fill={accent} />
@@ -289,19 +277,15 @@ function LunaHumanoidAvatar({
           </g>
         )}
 
-        {/* Torso */}
         <rect x="34" y="58" width="42" height="34" rx="11" fill="#e2e8f0" stroke="#94a3b8" strokeWidth="1.6" />
-        {/* Chest Telemetry Display */}
         <rect x="44" y="66" width="22" height="13" rx="3.5" fill="#0f172a" stroke={accent} strokeWidth="1.3" />
         <circle cx="51" cy="72.5" r="2.3" fill={accent} />
         <line x1="56" y1="71" x2="62" y2="71" stroke={accent} strokeWidth="1.5" />
         <line x1="56" y1="74.5" x2="60" y2="74.5" stroke="#94a3b8" strokeWidth="1.5" />
 
-        {/* Articulated Arms */}
         <path d={leftArmPath} stroke="#e2e8f0" strokeWidth="7" strokeLinecap="round" />
         <path d={rightArmPath} stroke="#e2e8f0" strokeWidth="7" strokeLinecap="round" />
 
-        {/* Legs & Boots */}
         <path d="M 45 92 L 42 114" stroke="#cbd5e1" strokeWidth="7.5" strokeLinecap="round" />
         <path d="M 65 92 L 68 114" stroke="#cbd5e1" strokeWidth="7.5" strokeLinecap="round" />
         <rect x="35" y="112" width="13" height="6" rx="3" fill="#334155" />
@@ -370,7 +354,7 @@ export default function LunarSurvivalGame() {
   const simRef = useRef({
     missionTime: 0,
     x: -135,
-    y: 215, // World Y above datum (m)
+    y: 215,
     vx: 9.0,
     vy: -3.5,
     prevVy: -3.5,
@@ -390,8 +374,8 @@ export default function LunarSurvivalGame() {
     rcsRight: false,
     boostHeld: false,
     padSlopeDeg: 2.2,
-    dustAccumulation: 0, // 0..100%
-    stormIntensity: 0, // 0..1 (Mars dust storm or lunar electrostatic ejecta)
+    dustAccumulation: 0,
+    stormIntensity: 0,
     stormWindX: 0,
     failure: null as FailureState | null,
     nextFailureAt: 11,
@@ -537,7 +521,7 @@ export default function LunarSurvivalGame() {
     const startLeft = Math.random() > 0.35;
     const startX = startLeft ? -135 - Math.random() * 30 : 135 + Math.random() * 30;
     const startVx = startLeft ? 8.5 + Math.random() * 3.0 : -8.5 - Math.random() * 3.0;
-    const padSlopeDeg = Number(((Math.random() - 0.5) * 8.4).toFixed(1)); // -4.2° to +4.2°
+    const padSlopeDeg = Number(((Math.random() - 0.5) * 8.4).toFixed(1));
 
     simRef.current = {
       missionTime: 0,
@@ -578,7 +562,7 @@ export default function LunarSurvivalGame() {
       headline: '',
       summary: '',
       lastScore: 0,
-      lunaSpeech: `Powered descent initiated! Pad 01 grade is ${padSlopeDeg > 0 ? '+' : ''}${padSlopeDeg.toFixed(1)}°. Null lateral drift with Q/E and deploy gear (G) before touchdown.`,
+      lunaSpeech: `Powered descent initiated (${ENVIRONMENTS[envRef.current].id})! Pad 01 grade is ${padSlopeDeg > 0 ? '+' : ''}${padSlopeDeg.toFixed(1)}°. Null lateral drift with Q/E and deploy gear (G) before touchdown.`,
       lunaPose: 'nominal',
       lunaSpeakingTimer: 3.0,
       lastAdviceTime: 0,
@@ -589,7 +573,7 @@ export default function LunarSurvivalGame() {
     syncUi();
   }, [pushLog, syncUi]);
 
-  const blurBtn = (e: React.SyntheticEvent<HTMLButtonElement>) => {
+  const blurControl = (e: React.SyntheticEvent<HTMLElement>) => {
     if (e.currentTarget?.blur) e.currentTarget.blur();
   };
 
@@ -608,8 +592,38 @@ export default function LunarSurvivalGame() {
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
+      const flightCodes = new Set([
+        'Space',
+        'ArrowUp',
+        'ArrowDown',
+        'ArrowLeft',
+        'ArrowRight',
+        'KeyW',
+        'KeyA',
+        'KeyS',
+        'KeyD',
+        'KeyQ',
+        'KeyE',
+        'KeyG',
+        'KeyH',
+        'KeyT',
+        'KeyR',
+        'KeyL',
+        'KeyC',
+        'KeyX',
+        'KeyZ',
+      ]);
+
+      // Prevent <select> or <button> focus from hijacking Space / Arrow flight controls
+      if (flightCodes.has(e.code)) {
+        e.preventDefault();
+        const active = document.activeElement as HTMLElement | null;
+        if (active && (active.tagName === 'SELECT' || active.tagName === 'BUTTON' || active.tagName === 'INPUT')) {
+          active.blur();
+        }
+      }
+
       const s = simRef.current;
-      if (e.code === 'Space') e.preventDefault();
 
       if (s.status !== 'playing' && (e.code === 'Space' || e.code === 'Enter')) {
         launchMission();
@@ -620,7 +634,7 @@ export default function LunarSurvivalGame() {
       const rcsLocked = s.failure?.type === 'RCS_LOCK' && s.failure.phase === 'ACTIVE';
       const throttleJammed = s.failure?.type === 'THROTTLE_JAM' && s.failure.phase === 'ACTIVE';
 
-      // Attitude Pitch (A/D or Arrows)
+      // Attitude Pitch (A/D or Left/Right Arrows)
       if ((e.code === 'ArrowLeft' || e.code === 'KeyA') && !s.pitchLeft) {
         s.pitchLeft = true;
         s.angularVel -= 8;
@@ -654,7 +668,7 @@ export default function LunarSurvivalGame() {
         }
       }
 
-      // Throttle Commands
+      // Throttle Commands (Space, W/S, Up/Down Arrows, Shift/Ctrl)
       if (e.code === 'Space' && !s.boostHeld) {
         if (throttleJammed) {
           setLunaMessage('Throttle actuator is jammed! Use pitch attitude (A/D) to manage descent vector until recovery.', 'caution', 'WARN');
@@ -664,13 +678,13 @@ export default function LunarSurvivalGame() {
           s.hoverHold = false;
         }
       }
-      if (e.code === 'ArrowUp' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+      if (e.code === 'ArrowUp' || e.code === 'KeyW' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
         if (!throttleJammed) {
           s.hoverHold = false;
           s.cmdThrottle = clamp(s.cmdThrottle + 0.1, 0, 1);
         }
       }
-      if (e.code === 'ArrowDown' || e.code === 'ControlLeft' || e.code === 'ControlRight') {
+      if (e.code === 'ArrowDown' || e.code === 'KeyS' || e.code === 'ControlLeft' || e.code === 'ControlRight') {
         if (!throttleJammed) {
           s.hoverHold = false;
           s.cmdThrottle = clamp(s.cmdThrottle - 0.1, 0, 1);
@@ -767,14 +781,12 @@ export default function LunarSurvivalGame() {
         s.lunaSpeakingTimer = Math.max(0, s.lunaSpeakingTimer - frameDt);
       }
 
-      // 1. Sub-stepped SI Physics Loop (200 Hz)
       if (s.status === 'playing') {
         accumulator += frameDt;
         while (accumulator >= SUB_DT) {
           accumulator -= SUB_DT;
           s.missionTime += SUB_DT;
 
-          // Scheduled static failure progression
           if (s.failure) {
             s.failure.timer -= SUB_DT;
             if (s.failure.timer <= 0) {
@@ -802,7 +814,7 @@ export default function LunarSurvivalGame() {
           }
 
           const mass = DRY_MASS_KG + s.fuelKg;
-          const inertiaFactor = mass / (DRY_MASS_KG + INITIAL_FUEL_KG); // Lighter ship rotates faster
+          const inertiaFactor = mass / (DRY_MASS_KG + INITIAL_FUEL_KG);
           const throttleJammed = s.failure?.type === 'THROTTLE_JAM' && s.failure.phase === 'ACTIVE';
 
           if (!throttleJammed) {
@@ -811,7 +823,7 @@ export default function LunarSurvivalGame() {
             } else if (s.hoverHold && s.fuelKg > 0) {
               const cosP = Math.max(0.35, Math.cos((s.pitchDeg * Math.PI) / 180));
               const neededThrust = (mass * (env.gravity - s.vy * 2.4)) / cosP;
-              s.cmdThrottle = clamp(neededThrust / MAX_THRUST_N, 0, 1);
+              s.cmdThrottle = clamp(neededThrust / env.maxThrustN, 0, 1);
             }
           }
 
@@ -820,15 +832,12 @@ export default function LunarSurvivalGame() {
             s.hoverHold = false;
           }
 
-          // First-order engine spool lag (tau = 0.16s)
           const spoolTau = 0.16;
           s.actualThrottle += ((s.fuelKg > 0 ? s.cmdThrottle : 0) - s.actualThrottle) * (SUB_DT / spoolTau);
           if (s.actualThrottle < 0.002) s.actualThrottle = 0;
 
-          // Propellant burn
           s.fuelKg = Math.max(0, s.fuelKg - s.actualThrottle * FUEL_BURN_RATE * SUB_DT);
 
-          // Attitude pitch dynamics
           const pitchTorque = 96 / Math.max(0.72, inertiaFactor);
           if (s.pitchLeft) s.angularVel -= pitchTorque * SUB_DT;
           if (s.pitchRight) s.angularVel += pitchTorque * SUB_DT;
@@ -844,25 +853,22 @@ export default function LunarSurvivalGame() {
           s.angularVel = clamp(s.angularVel, -95, 95);
           s.pitchDeg = clamp(s.pitchDeg + s.angularVel * SUB_DT, -78, 78);
 
-          // Main engine thrust vector
-          const thrustN = s.actualThrottle * MAX_THRUST_N;
+          const thrustN = s.actualThrottle * env.maxThrustN;
           const rad = (s.pitchDeg * Math.PI) / 180;
 
-          // Lateral RCS cold-gas translation jets
           const rcsLocked = s.failure?.type === 'RCS_LOCK' && s.failure.phase === 'ACTIVE';
           let rcsForceX = 0;
           if (!rcsLocked && s.fuelKg > 0) {
             if (s.rcsLeft) {
-              rcsForceX -= RCS_LAT_THRUST_N;
+              rcsForceX -= env.rcsLatThrustN;
               s.fuelKg = Math.max(0, s.fuelKg - 0.55 * SUB_DT);
             }
             if (s.rcsRight) {
-              rcsForceX += RCS_LAT_THRUST_N;
+              rcsForceX += env.rcsLatThrustN;
               s.fuelKg = Math.max(0, s.fuelKg - 0.55 * SUB_DT);
             }
           }
 
-          // Environmental disturbance (Mars dust storm gust vs Moon vacuum plume/electrostatic ejecta)
           const terrainH = getTerrainHeight(s.x, s.padSlopeDeg);
           const agl = Math.max(0, s.y - terrainH);
 
@@ -871,7 +877,6 @@ export default function LunarSurvivalGame() {
             s.stormIntensity = clamp(0.25 + wave * 0.65, 0, 1);
             s.stormWindX = Math.sin(s.missionTime * 0.9) * 14 * s.stormIntensity;
           } else {
-            // Moon has NO atmosphere: dust is purely from supersonic engine exhaust blowback near surface
             const plumeBlowback = agl < 46 ? (1 - agl / 46) * s.actualThrottle : 0;
             s.stormIntensity = clamp(plumeBlowback * 1.15, 0, 1);
             s.stormWindX = 0;
@@ -881,7 +886,6 @@ export default function LunarSurvivalGame() {
             s.dustAccumulation = clamp(s.dustAccumulation + s.stormIntensity * 4.2 * SUB_DT, 0, 100);
           }
 
-          // Aerodynamic drag (0 on Moon, active on Mars)
           const relVx = s.vx - s.stormWindX;
           const dragFx = -0.5 * env.atmoDensity * env.dragArea * relVx * Math.abs(relVx);
           const dragFy = -0.5 * env.atmoDensity * env.dragArea * s.vy * Math.abs(s.vy);
@@ -895,7 +899,6 @@ export default function LunarSurvivalGame() {
           s.x += s.vx * SUB_DT;
           s.y += s.vy * SUB_DT;
 
-          // Bonus Star Ring check
           if (!s.bonusRing.collected) {
             const dRing = Math.hypot(s.x - s.bonusRing.x, s.y + 10 - s.bonusRing.y);
             if (dRing < 20) {
@@ -916,7 +919,6 @@ export default function LunarSurvivalGame() {
             }
           }
 
-          // Ground Touchdown & Strut Slope Balancing
           const localGroundY = getTerrainHeight(s.x, s.padSlopeDeg);
           if (s.y <= localGroundY) {
             s.y = localGroundY;
@@ -973,7 +975,6 @@ export default function LunarSurvivalGame() {
             if (s.isBalancing) {
               s.vy = 0;
               s.vx *= Math.exp(-4.5 * SUB_DT);
-              // Gravity tipping torque if ship tilt deviates from terrain slope
               const slopeError = s.pitchDeg - localSlope;
               s.angularVel += slopeError * 1.4 * SUB_DT;
               s.balancingTimer += SUB_DT;
@@ -1012,14 +1013,13 @@ export default function LunarSurvivalGame() {
                 s.summary = `Propellant remaining: ${Math.round((s.fuelKg / INITIAL_FUEL_KG) * 100)}% · Slope: ${localSlope.toFixed(1)}° · Score: +${total} pts`;
                 setHighScore((prev) => Math.max(prev, total));
                 setStreak((prev) => prev + 1);
-                setLunaMessage(`Engine stop! Tranquility base locked—safe landing with +${total} pts!`, 'celebrate', 'INFO', true);
+                setLunaMessage(`Engine stop! Landing site locked—safe touchdown with +${total} pts!`, 'celebrate', 'INFO', true);
                 break;
               }
             }
           }
         }
 
-        // Contextual LUNA Guidance Checks (connected to real physics & player behavior)
         const terrainH = getTerrainHeight(s.x, s.padSlopeDeg);
         const agl = Math.max(0, s.y - terrainH);
         const vertAccel = (s.vy - s.prevVy) / Math.max(0.001, frameDt);
@@ -1038,11 +1038,10 @@ export default function LunarSurvivalGame() {
           } else if (agl < 65 && Math.abs(s.vx) > 4.2) {
             setLunaMessage(`Horizontal drift is ${Math.abs(s.vx).toFixed(1)} m/s—null sideways speed with ${s.vx > 0 ? 'Q' : 'E'} before landing.`, 'caution', 'WARN');
           } else if (s.dustAccumulation > 72) {
-            setLunaMessage('Optical sensors heavily coated in regolith dust—press C to cycle the sensor wiper.', 'caution', 'WARN');
+            setLunaMessage('Optical sensors heavily coated in dust—press C to cycle the sensor wiper.', 'caution', 'WARN');
           }
         }
 
-        // Surface Regolith Plume Particles
         if (s.actualThrottle > 0.08 && agl < 44 && agl >= 0) {
           const rad = (s.pitchDeg * Math.PI) / 180;
           for (let i = 0; i < 3; i++) {
@@ -1057,7 +1056,6 @@ export default function LunarSurvivalGame() {
         }
       }
 
-      // Update Particles
       s.dust = s.dust
         .map((d) => ({
           ...d,
@@ -1078,7 +1076,6 @@ export default function LunarSurvivalGame() {
         }))
         .filter((sp) => sp.life > 0);
 
-      // 2. Render Descent Viewport
       const W = canvas.width;
       const H = canvas.height;
       ctx.clearRect(0, 0, W, H);
@@ -1089,7 +1086,6 @@ export default function LunarSurvivalGame() {
       ctx.fillStyle = skyGrad;
       ctx.fillRect(0, 0, W, H);
 
-      // Stars
       ctx.fillStyle = '#f8fafc';
       for (let i = 0; i < 75; i++) {
         const sx = (i * 149) % W;
@@ -1099,7 +1095,6 @@ export default function LunarSurvivalGame() {
       }
       ctx.globalAlpha = 1;
 
-      // Earth (Moon sky) or Phobos (Mars sky)
       const ex = W * 0.84;
       const ey = 56;
       const eGrad = ctx.createRadialGradient(ex - 5, ey - 5, 2, ex, ey, 19);
@@ -1124,7 +1119,6 @@ export default function LunarSurvivalGame() {
       const toScreenX = (wx: number) => W * 0.5 + (wx - camX) * pxPerMeter;
       const toScreenY = (wy: number) => datumScreenY - wy * pxPerMeter;
 
-      // Distant Crater Rim Silhouette
       ctx.fillStyle = env.ridgeFill;
       ctx.beginPath();
       ctx.moveTo(0, datumScreenY + 30);
@@ -1137,7 +1131,6 @@ export default function LunarSurvivalGame() {
       ctx.closePath();
       ctx.fill();
 
-      // Procedural Sloped Crater Terrain
       ctx.fillStyle = env.groundFill;
       ctx.beginPath();
       ctx.moveTo(0, H + 40);
@@ -1161,7 +1154,6 @@ export default function LunarSurvivalGame() {
       }
       ctx.stroke();
 
-      // Sloped Landing Pad 01 + 2X Bullseye Center
       const padL_X = toScreenX(-48);
       const padL_Y = toScreenY(getTerrainHeight(-48, s.padSlopeDeg));
       const padR_X = toScreenX(48);
@@ -1202,7 +1194,6 @@ export default function LunarSurvivalGame() {
         Math.max(padL_Y, padR_Y) + 18,
       );
 
-      // Ballistic Trajectory Predictor Arc
       if (s.status === 'playing' && !s.isBalancing) {
         ctx.save();
         ctx.setLineDash([4, 4]);
@@ -1230,7 +1221,6 @@ export default function LunarSurvivalGame() {
         ctx.restore();
       }
 
-      // Radar Altimeter Laser Beam
       const lx = toScreenX(s.x);
       const ly = toScreenY(s.y);
       const groundAtLanderY = toScreenY(getTerrainHeight(s.x, s.padSlopeDeg));
@@ -1243,7 +1233,6 @@ export default function LunarSurvivalGame() {
         ctx.stroke();
       }
 
-      // Bonus Telemetry Ring
       if (!s.bonusRing.collected) {
         const rx = toScreenX(s.bonusRing.x);
         const ry = toScreenY(s.bonusRing.y);
@@ -1259,7 +1248,6 @@ export default function LunarSurvivalGame() {
         ctx.fillText('+250 PTS', rx, ry - 23);
       }
 
-      // Regolith Dust & Sparks
       s.dust.forEach((d) => {
         ctx.fillStyle = `rgba(${env.dustRgb}, ${clamp(d.life * 0.65, 0, 1)})`;
         ctx.beginPath();
@@ -1275,12 +1263,10 @@ export default function LunarSurvivalGame() {
       });
       ctx.globalAlpha = 1;
 
-      // Lander Spacecraft
       ctx.save();
       ctx.translate(lx, ly);
       ctx.rotate((s.pitchDeg * Math.PI) / 180);
 
-      // Landing Spotlight Cone
       if (s.spotlightOn && s.status !== 'crashed') {
         const cone = ctx.createLinearGradient(0, -6, 0, 120);
         cone.addColorStop(0, 'rgba(254, 249, 195, 0.36)');
@@ -1295,7 +1281,6 @@ export default function LunarSurvivalGame() {
         ctx.fill();
       }
 
-      // Main Engine Exhaust Plume
       if (s.actualThrottle > 0.02 && s.fuelKg > 0 && s.status === 'playing') {
         const flameH = 16 + s.actualThrottle * 46 + Math.random() * 8;
         const fGrad = ctx.createLinearGradient(0, -4, 0, flameH);
@@ -1311,7 +1296,6 @@ export default function LunarSurvivalGame() {
         ctx.fill();
       }
 
-      // Attitude Pitch Thrusters (A/D)
       if (s.pitchLeft && s.status === 'playing') {
         ctx.fillStyle = '#facc15';
         ctx.beginPath();
@@ -1331,7 +1315,6 @@ export default function LunarSurvivalGame() {
         ctx.fill();
       }
 
-      // Cold-Gas RCS Translation Plumes (Q/E)
       if (s.rcsLeft && s.status === 'playing') {
         ctx.fillStyle = '#38bdf8';
         ctx.beginPath();
@@ -1351,7 +1334,6 @@ export default function LunarSurvivalGame() {
         ctx.fill();
       }
 
-      // Landing Struts
       if (s.gearDeployed) {
         ctx.strokeStyle = '#e2e8f0';
         ctx.lineWidth = 2.5;
@@ -1368,7 +1350,6 @@ export default function LunarSurvivalGame() {
         ctx.stroke();
       }
 
-      // Descent Stage + Ascent Cabin
       if (s.status !== 'crashed') {
         ctx.fillStyle = '#f59e0b';
         ctx.fillRect(-11, -18, 22, 11);
@@ -1390,14 +1371,12 @@ export default function LunarSurvivalGame() {
       }
       ctx.restore();
 
-      // Atmospheric / Plume Dust Haze Overlay
       const hazeAlpha = clamp(s.stormIntensity * 0.28 + (s.dustAccumulation / 100) * 0.34, 0, 0.58);
       if (hazeAlpha > 0.02) {
         ctx.fillStyle = `rgba(${env.dustRgb}, ${hazeAlpha})`;
         ctx.fillRect(0, 0, W, H);
       }
 
-      // Floating Telemetry Callout next to Lander
       if (s.status === 'playing') {
         const fastDrop = Math.abs(s.vy) > 4.3;
         ctx.fillStyle = fastDrop ? '#fca5a5' : '#86efac';
@@ -1450,7 +1429,9 @@ export default function LunarSurvivalGame() {
             value={envId}
             onChange={(e) => {
               const next = e.target.value as EnvironmentId;
+              blurControl(e);
               setEnvId(next);
+              simRef.current.stormIntensity = next === 'MARS' ? 0.35 : 0.08;
               pushLog('SYS', `Environment switched to ${ENVIRONMENTS[next].label}.`, simRef.current.missionTime);
             }}
             style={styles.selectControl}
@@ -1464,7 +1445,9 @@ export default function LunarSurvivalGame() {
             value=""
             disabled={ui.status !== 'playing' || Boolean(ui.failure)}
             onChange={(e) => {
-              if (e.target.value) triggerFailure(e.target.value as FailureType);
+              const val = e.target.value as FailureType;
+              blurControl(e);
+              if (val) triggerFailure(val);
             }}
             style={styles.selectControl}
             title="Simulate Mission Anomaly"
@@ -1486,7 +1469,7 @@ export default function LunarSurvivalGame() {
           <button
             type="button"
             onClick={(e) => {
-              blurBtn(e);
+              blurControl(e);
               setVoiceOn((v) => !v);
             }}
             style={{
@@ -1502,7 +1485,7 @@ export default function LunarSurvivalGame() {
           <button
             type="button"
             onClick={(e) => {
-              blurBtn(e);
+              blurControl(e);
               setMuted((m) => !m);
             }}
             style={styles.iconBtn}
@@ -1566,10 +1549,13 @@ export default function LunarSurvivalGame() {
             ref={canvasRef}
             width={620}
             height={440}
+            onClick={() => {
+              const active = document.activeElement as HTMLElement | null;
+              if (active?.blur) active.blur();
+            }}
             style={{ width: '100%', height: 440, display: 'block', background: '#02040a' }}
           />
 
-          {/* Bottom Viewport Status Strip */}
           <div style={styles.viewportFooter}>
             <span>
               PAD GRADE: <strong>{ui.padSlopeDeg > 0 ? '+' : ''}{ui.padSlopeDeg.toFixed(1)}°</strong> · PAD DIST:{' '}
@@ -1587,24 +1573,23 @@ export default function LunarSurvivalGame() {
             </span>
           </div>
 
-          {/* Ready / Landed / Crashed Overlay */}
           {ui.status !== 'playing' && (
             <div style={styles.overlay}>
               {ui.status === 'ready' && (
                 <>
                   <div style={{ fontSize: 36 }}>🛸</div>
                   <h3 style={{ margin: '8px 0 6px', fontSize: 21, fontWeight: 800 }}>
-                    Ready for Powered Descent
+                    Ready for Powered Descent ({ENVIRONMENTS[envId].id})
                   </h3>
                   <p style={{ maxWidth: 390, fontSize: 12.5, color: '#cbd5e1', lineHeight: 1.55, margin: '0 0 16px' }}>
-                    • <strong>Throttle / Hold Space</strong> to keep sink rate below <strong>4.3 m/s</strong>
+                    • <strong>W/S, Arrows, or Space</strong> to keep sink rate below <strong>4.3 m/s</strong>
                     <br />• <strong>A / D</strong> to tilt attitude · <strong>Q / E</strong> to slide sideways with RCS jets
                     <br />• <strong>G</strong> for Landing Legs · Balance struts on sloped crater pads!
                   </p>
                   <button
                     type="button"
                     onClick={(e) => {
-                      blurBtn(e);
+                      blurControl(e);
                       launchMission();
                     }}
                     style={styles.launchBtn}
@@ -1624,7 +1609,7 @@ export default function LunarSurvivalGame() {
                   <button
                     type="button"
                     onClick={(e) => {
-                      blurBtn(e);
+                      blurControl(e);
                       launchMission();
                     }}
                     style={styles.launchBtn}
@@ -1644,7 +1629,7 @@ export default function LunarSurvivalGame() {
                   <button
                     type="button"
                     onClick={(e) => {
-                      blurBtn(e);
+                      blurControl(e);
                       launchMission();
                     }}
                     style={styles.launchBtn}
@@ -1657,9 +1642,8 @@ export default function LunarSurvivalGame() {
           )}
         </div>
 
-        {/* COLUMN 2: Cockpits Gauges & Flight Controls */}
+        {/* COLUMN 2: Cockpit Gauges & Flight Controls */}
         <div style={styles.cockpitCard}>
-          {/* 4 Primary Flight Gauges */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
             <div style={styles.gaugeBox}>
               <span style={styles.gaugeLabel}>HEIGHT AGL</span>
@@ -1691,7 +1675,6 @@ export default function LunarSurvivalGame() {
             </div>
           </div>
 
-          {/* Propellant & Engine Spool Bar */}
           <div style={styles.subPanel}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10.5, color: '#94a3b8', fontWeight: 700 }}>
               <span>PROPELLANT MASS: {ui.fuelKg} / {INITIAL_FUEL_KG} kg</span>
@@ -1709,7 +1692,6 @@ export default function LunarSurvivalGame() {
             </div>
           </div>
 
-          {/* Main Engine Throttle Section */}
           <div style={{ ...styles.subPanel, position: 'relative' }}>
             {throttleJammed && (
               <div style={styles.lockOverlay}>
@@ -1750,7 +1732,7 @@ export default function LunarSurvivalGame() {
                     type="button"
                     disabled={ui.status !== 'playing' || throttleJammed}
                     onClick={(e) => {
-                      blurBtn(e);
+                      blurControl(e);
                       simRef.current.hoverHold = false;
                       simRef.current.cmdThrottle = b.val;
                       syncUi();
@@ -1772,7 +1754,7 @@ export default function LunarSurvivalGame() {
                 type="button"
                 disabled={ui.status !== 'playing' || throttleJammed}
                 onPointerDown={(e) => {
-                  blurBtn(e);
+                  blurControl(e);
                   simRef.current.prevThrottle = simRef.current.cmdThrottle;
                   simRef.current.boostHeld = true;
                   simRef.current.hoverHold = false;
@@ -1798,7 +1780,7 @@ export default function LunarSurvivalGame() {
                 type="button"
                 disabled={ui.status !== 'playing' || throttleJammed}
                 onClick={(e) => {
-                  blurBtn(e);
+                  blurControl(e);
                   simRef.current.hoverHold = !simRef.current.hoverHold;
                   syncUi();
                 }}
@@ -1813,7 +1795,6 @@ export default function LunarSurvivalGame() {
             </div>
           </div>
 
-          {/* Attitude Pitch & SAS */}
           <div style={styles.subPanel}>
             <span style={styles.sectionTitle}>🧭 ATTITUDE PITCH &amp; SAS DAMPING</span>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, marginTop: 8 }}>
@@ -1821,7 +1802,7 @@ export default function LunarSurvivalGame() {
                 type="button"
                 disabled={ui.status !== 'playing'}
                 onPointerDown={(e) => {
-                  blurBtn(e);
+                  blurControl(e);
                   simRef.current.pitchLeft = true;
                   simRef.current.angularVel -= 8;
                 }}
@@ -1840,7 +1821,7 @@ export default function LunarSurvivalGame() {
                 type="button"
                 disabled={ui.status !== 'playing'}
                 onPointerDown={(e) => {
-                  blurBtn(e);
+                  blurControl(e);
                   simRef.current.pitchRight = true;
                   simRef.current.angularVel += 8;
                 }}
@@ -1859,7 +1840,7 @@ export default function LunarSurvivalGame() {
                 type="button"
                 disabled={ui.status !== 'playing'}
                 onClick={(e) => {
-                  blurBtn(e);
+                  blurControl(e);
                   simRef.current.pitchDeg = 0;
                   simRef.current.angularVel = 0;
                   syncUi();
@@ -1873,7 +1854,7 @@ export default function LunarSurvivalGame() {
                 type="button"
                 disabled={ui.status !== 'playing'}
                 onClick={(e) => {
-                  blurBtn(e);
+                  blurControl(e);
                   simRef.current.sasHold = !simRef.current.sasHold;
                   syncUi();
                 }}
@@ -1888,7 +1869,6 @@ export default function LunarSurvivalGame() {
             </div>
           </div>
 
-          {/* Lateral RCS Translation Thrusters */}
           <div style={{ ...styles.subPanel, position: 'relative' }}>
             {rcsLocked && (
               <div style={styles.lockOverlay}>
@@ -1901,7 +1881,7 @@ export default function LunarSurvivalGame() {
                 type="button"
                 disabled={ui.status !== 'playing' || rcsLocked}
                 onPointerDown={(e) => {
-                  blurBtn(e);
+                  blurControl(e);
                   simRef.current.rcsLeft = true;
                   if (simRef.current.fuelKg > 0) simRef.current.vx -= 0.95;
                 }}
@@ -1920,7 +1900,7 @@ export default function LunarSurvivalGame() {
                 type="button"
                 disabled={ui.status !== 'playing' || rcsLocked}
                 onPointerDown={(e) => {
-                  blurBtn(e);
+                  blurControl(e);
                   simRef.current.rcsRight = true;
                   if (simRef.current.fuelKg > 0) simRef.current.vx += 0.95;
                 }}
@@ -1937,13 +1917,12 @@ export default function LunarSurvivalGame() {
             </div>
           </div>
 
-          {/* Gear, Spotlight & Optics Wiper */}
           <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 0.9fr', gap: 6 }}>
             <button
               type="button"
               disabled={ui.status !== 'playing'}
               onClick={(e) => {
-                blurBtn(e);
+                blurControl(e);
                 simRef.current.gearDeployed = !simRef.current.gearDeployed;
                 playSoundEffect('gear', mutedRef.current);
                 syncUi();
@@ -1962,7 +1941,7 @@ export default function LunarSurvivalGame() {
               type="button"
               disabled={ui.status !== 'playing'}
               onClick={(e) => {
-                blurBtn(e);
+                blurControl(e);
                 simRef.current.spotlightOn = !simRef.current.spotlightOn;
                 syncUi();
               }}
@@ -1980,7 +1959,7 @@ export default function LunarSurvivalGame() {
               type="button"
               disabled={ui.status !== 'playing'}
               onClick={(e) => {
-                blurBtn(e);
+                blurControl(e);
                 simRef.current.dustAccumulation = 0;
                 syncUi();
               }}
@@ -2001,7 +1980,6 @@ export default function LunarSurvivalGame() {
         <aside style={styles.lunaCard}>
           <LunaHumanoidAvatar pose={ui.lunaPose} speaking={ui.lunaSpeaking} blackout={commsBlackout} />
 
-          {/* LUNA Live Telemetry Dialogue */}
           <div
             style={{
               background: '#060a14',
@@ -2022,13 +2000,12 @@ export default function LunarSurvivalGame() {
             </p>
           </div>
 
-          {/* Quick Guidance Queries */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
             <button
               type="button"
               disabled={commsBlackout}
               onClick={(e) => {
-                blurBtn(e);
+                blurControl(e);
                 setLunaMessage(
                   `Telemetry: Alt ${ui.altitudeAgl.toFixed(0)}m, sink ${ui.speedDown.toFixed(1)} m/s, lateral ${ui.speedSide.toFixed(1)} m/s, fuel ${ui.fuelPct}%.`,
                   'nominal',
@@ -2046,7 +2023,7 @@ export default function LunarSurvivalGame() {
               type="button"
               disabled={commsBlackout}
               onClick={(e) => {
-                blurBtn(e);
+                blurControl(e);
                 const dir = ui.padDistance < -16 ? 'slide right (E)' : ui.padDistance > 16 ? 'slide left (Q)' : 'hold center';
                 setLunaMessage(
                   `Approach vector: ${dir} to align with Pad 01 (${ui.padSlopeDeg.toFixed(1)}° grade). Keep descent under 4.3 m/s.`,
@@ -2065,7 +2042,7 @@ export default function LunarSurvivalGame() {
               type="button"
               disabled={commsBlackout}
               onClick={(e) => {
-                blurBtn(e);
+                blurControl(e);
                 setLunaMessage(
                   `Diagnostics: Optics dust ${ui.dustPct}%, SAS ${ui.sasHold ? 'active' : 'off'}, gear ${ui.gearDeployed ? 'deployed' : 'stowed'}.`,
                   'nominal',
@@ -2080,7 +2057,6 @@ export default function LunarSurvivalGame() {
             </button>
           </div>
 
-          {/* Timestamped Mission Event Log */}
           <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 150 }}>
             <div style={{ fontSize: 10, fontWeight: 800, color: '#94a3b8', letterSpacing: '0.06em', marginBottom: 6 }}>
               MISSION EVENT LOG
