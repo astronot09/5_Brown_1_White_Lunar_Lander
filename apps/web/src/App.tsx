@@ -18,10 +18,251 @@ import {
   fetchJplHorizonsEphemeris,
   runSiteSimulation,
   type PanelPreset,
+  type SimulationStepState,
 } from './engine/physicsEngine';
 
 type MainTab = 'HOME' | 'EXPLORER' | 'GAME';
-type ActivePopup = 'NONE' | 'SITES' | 'TECH_GRAPHS' | 'AI_HOOK';
+type ActivePopup = 'NONE' | 'SITES' | 'TECH_GRAPHS' | 'MISSION_PROB';
+type DepartureOrbitalId = 'ISS' | 'TIANGONG' | 'HLS_DEPOT' | 'GATEWAY';
+
+const ORBITAL_DEPARTURE_PROFILES: Record<
+  DepartureOrbitalId,
+  { label: string; transitDays: number; deltaVKms: number; inclDeg: number }
+> = {
+  ISS: { label: 'ISS (418 km LEO)', transitDays: 3.2, deltaVKms: 4.18, inclDeg: 51.64 },
+  TIANGONG: { label: 'Tiangong (389 km LEO)', transitDays: 3.3, deltaVKms: 4.14, inclDeg: 41.47 },
+  HLS_DEPOT: { label: 'Starship HLS Depot (500 km)', transitDays: 3.0, deltaVKms: 4.02, inclDeg: 28.5 },
+  GATEWAY: { label: 'Lunar Gateway (9:2 NRHO)', transitDays: 0.5, deltaVKms: 0.73, inclDeg: 90.0 },
+};
+
+function clamp(v: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, v));
+}
+
+function formatUtcShort(ms: number): string {
+  if (!Number.isFinite(ms)) return '—';
+  const d = new Date(ms);
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  const mon = months[d.getUTCMonth()] ?? 'Jan';
+  const yr = d.getUTCFullYear();
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${day} ${mon} ${yr} ${hh}:${mm} UTC`;
+}
+
+interface ProbabilityBreakdown {
+  isKnownLocation: boolean;
+  locationStatusLabel: string;
+  totalMissionHours: number;
+  sunlitHours: number;
+  darknessHours: number;
+  slopeDeg: number;
+  touchdownSunElDeg: number;
+  departureUtcLabel: string;
+  arrivalUtcLabel: string;
+  transitDays: number;
+  factors: {
+    id: string;
+    label: string;
+    weightPct: number;
+    scorePct: number;
+    detail: string;
+    color: string;
+  }[];
+  overallProbabilityPct: number;
+  verdictLabel: string;
+  verdictColor: string;
+  engineeringNotes: string[];
+}
+
+function computeMissionProbability(
+  site: CuratedLunarSite,
+  currentState: SimulationStepState,
+  metrics: {
+    illuminationPct: number;
+    longestDarknessHours: number;
+    dteAvailabilityPct: number;
+    totalEnergyKwhPerM2: number;
+  },
+  missionStartIso: string,
+  windowDays: number,
+  stationId: DepartureOrbitalId,
+): ProbabilityBreakdown {
+  const isKnownLocation = site.program !== 'CUSTOM' && !site.siteId.startsWith('custom_');
+  const slopeDeg = site.slopeDeg ?? 4.5;
+  const totalMissionHours = windowDays * 24;
+  const sunlitHours = (metrics.illuminationPct / 100) * totalMissionHours;
+  const darknessHours = Math.max(0, totalMissionHours - sunlitHours);
+
+  const station = ORBITAL_DEPARTURE_PROFILES[stationId];
+  const landingMs = Date.parse(currentState.timeUtc) || Date.parse(missionStartIso) || Date.now();
+  const departMs = landingMs - station.transitDays * 86400 * 1000;
+
+  // 1. Sunlight Hours & Power Survival Score (30% weight)
+  // Targets >= 156 hrs (6.5 days) for short missions or >= 65% sunlit duty cycle, penalized by long eclipses
+  const targetHours = Math.min(totalMissionHours * 0.72, 168);
+  const hourRatioScore = clamp((sunlitHours / Math.max(24, targetHours)) * 88, 12, 98);
+  const eclipsePenalty = metrics.longestDarknessHours > 120 ? 18 : metrics.longestDarknessHours > 72 ? 8 : 0;
+  const solarScore = Math.round(clamp(hourRatioScore - eclipsePenalty, 8, 99));
+
+  // 2. Orbital Date & Touchdown Lighting Window Score (25% weight)
+  // Ideal lunar landing sun elevation is 4° to 28° (clear boulder shadows without night darkness or overhead washout)
+  const sunEl = currentState.sunElevationDeg;
+  let orbitalTimingScore = 50;
+  let timingDetail = '';
+  if (!currentState.sunVisible || sunEl < 0) {
+    orbitalTimingScore = 24;
+    timingDetail = `Touchdown in lunar night (${sunEl.toFixed(1)}° sun) — high terrain hazard risk`;
+  } else if (sunEl >= 4 && sunEl <= 28) {
+    orbitalTimingScore = 96;
+    timingDetail = `Optimal shadow contrast (${sunEl.toFixed(1)}° sun) on ${formatUtcShort(landingMs).slice(0, 11)}`;
+  } else if (sunEl > 28 && sunEl <= 55) {
+    orbitalTimingScore = 82;
+    timingDetail = `Moderate overhead glare (${sunEl.toFixed(1)}° sun) on ${formatUtcShort(landingMs).slice(0, 11)}`;
+  } else if (sunEl > 55) {
+    orbitalTimingScore = 68;
+    timingDetail = `High noon washout (${sunEl.toFixed(1)}° sun) reduces crater depth contrast`;
+  } else {
+    orbitalTimingScore = 64;
+    timingDetail = `Grazing horizon light (${sunEl.toFixed(1)}° sun) casts extreme long shadows`;
+  }
+  // Slight bonus for shorter orbital transit time
+  orbitalTimingScore = Math.round(
+    clamp(orbitalTimingScore - (station.transitDays > 3.1 ? 3 : 0), 15, 99),
+  );
+
+  // 3. Location Familiarity & Reconnaissance Survey Score (20% weight)
+  const familiarityScore = isKnownLocation ? 95 : 58;
+  const locationStatusLabel = isKnownLocation
+    ? `Surveyed ${site.program} Mission Site`
+    : 'Unvisited Custom Coordinates';
+
+  // 4. Terrain Slope & Topographic Safety Score (15% weight)
+  // NASA HLS threshold: <= 5° goal, <= 8° limit
+  let terrainScore = 95;
+  if (slopeDeg <= 3.0) terrainScore = 97;
+  else if (slopeDeg <= 5.0) terrainScore = 89;
+  else if (slopeDeg <= 8.0) terrainScore = 72;
+  else if (slopeDeg <= 12.0) terrainScore = 46;
+  else terrainScore = 22;
+
+  // 5. Direct-to-Earth (DTE) Communications Uptime Score (10% weight)
+  const dteScore = Math.round(
+    clamp(metrics.dteAvailabilityPct * 0.92 + (currentState.earthVisible ? 8 : 0), 15, 99),
+  );
+
+  const weighted =
+    solarScore * 0.3 +
+    orbitalTimingScore * 0.25 +
+    familiarityScore * 0.2 +
+    terrainScore * 0.15 +
+    dteScore * 0.1;
+
+  const overallProbabilityPct = Number(clamp(weighted, 8, 98.5).toFixed(1));
+
+  const verdictLabel =
+    overallProbabilityPct >= 78
+      ? 'HIGH PROBABILITY OF MISSION SUCCESS'
+      : overallProbabilityPct >= 58
+        ? 'MODERATE PROBABILITY — CONDITIONAL GO'
+        : 'LOW PROBABILITY — HIGH MISSION RISK';
+
+  const verdictColor =
+    overallProbabilityPct >= 78 ? '#4ade80' : overallProbabilityPct >= 58 ? '#facc15' : '#f87171';
+
+  const engineeringNotes: string[] = [];
+  if (isKnownLocation) {
+    engineeringNotes.push(
+      `Known ${site.program} target provides verified LOLA DEM topography and prior orbital reconnaissance.`,
+    );
+  } else {
+    engineeringNotes.push(
+      'Custom unvisited coordinates carry +37% terrain & boulder uncertainty; switch to a surveyed site or verify slope.',
+    );
+  }
+
+  if (sunlitHours >= 156) {
+    engineeringNotes.push(
+      `${sunlitHours.toFixed(0)} sunlit hours (${metrics.illuminationPct.toFixed(1)}%) exceeds the 156-hr Artemis surface power baseline.`,
+    );
+  } else {
+    engineeringNotes.push(
+      `Only ${sunlitHours.toFixed(0)} sunlit hours in this ${windowDays}-day window — extend window or select a polar ridge.`,
+    );
+  }
+
+  if (!currentState.sunVisible || sunEl < 2) {
+    engineeringNotes.push(
+      'Selected arrival date lands in shadow/low sun; advance the date slider to catch local lunar morning (5°–25° sun).',
+    );
+  } else if (slopeDeg > 8) {
+    engineeringNotes.push(
+      `Terrain slope (${slopeDeg.toFixed(1)}°) exceeds the 8.0° HLS strut stability limit.`,
+    );
+  }
+
+  return {
+    isKnownLocation,
+    locationStatusLabel,
+    totalMissionHours,
+    sunlitHours,
+    darknessHours,
+    slopeDeg,
+    touchdownSunElDeg: sunEl,
+    departureUtcLabel: formatUtcShort(departMs),
+    arrivalUtcLabel: formatUtcShort(landingMs),
+    transitDays: station.transitDays,
+    factors: [
+      {
+        id: 'solar',
+        label: 'Sunlit Hours & Power Margin',
+        weightPct: 30,
+        scorePct: solarScore,
+        detail: `${sunlitHours.toFixed(0)}h sunlit (${metrics.illuminationPct.toFixed(1)}%) · Max eclipse ${metrics.longestDarknessHours}h`,
+        color: '#facc15',
+      },
+      {
+        id: 'orbital',
+        label: 'Orbital Date & Landing Lighting',
+        weightPct: 25,
+        scorePct: orbitalTimingScore,
+        detail: timingDetail,
+        color: '#38bdf8',
+      },
+      {
+        id: 'location',
+        label: 'Location Survey & Reconnaissance',
+        weightPct: 20,
+        scorePct: familiarityScore,
+        detail: isKnownLocation
+          ? `Pre-mapped ${site.program} landing zone (${site.demSource})`
+          : 'Unmapped custom pin — relies on onboard hazard lidar',
+        color: '#c084fc',
+      },
+      {
+        id: 'terrain',
+        label: 'Terrain Slope & Strut Stability',
+        weightPct: 15,
+        scorePct: terrainScore,
+        detail: `${slopeDeg.toFixed(1)}° local grade (HLS goal ≤ 5.0°, limit ≤ 8.0°)` ,
+        color: '#4ade80',
+      },
+      {
+        id: 'comms',
+        label: 'Earth DTE Telemetry Uptime',
+        weightPct: 10,
+        scorePct: dteScore,
+        detail: `${metrics.dteAvailabilityPct.toFixed(1)}% line-of-sight window (${currentState.earthVisible ? 'Earth visible now' : 'Earth occulted now'})`,
+        color: '#fb923c',
+      },
+    ],
+    overallProbabilityPct,
+    verdictLabel,
+    verdictColor,
+    engineeringNotes,
+  };
+}
 
 function EdgeHoverActionButton({
   side,
@@ -78,8 +319,10 @@ function HomeLandingView({
   sites,
   selectedSite,
   metrics,
+  probabilityPct,
   onSelectSite,
   onOpenExplorer,
+  onOpenProbability,
   onOpenOrbitView,
   onOpenGame,
   onOpenSplitCompare,
@@ -92,8 +335,10 @@ function HomeLandingView({
     dteAvailabilityPct: number;
     totalEnergyKwhPerM2: number;
   };
+  probabilityPct: number;
   onSelectSite: (site: CuratedLunarSite) => void;
   onOpenExplorer: () => void;
+  onOpenProbability: () => void;
   onOpenOrbitView: () => void;
   onOpenGame: () => void;
   onOpenSplitCompare: () => void;
@@ -115,7 +360,7 @@ function HomeLandingView({
         boxSizing: 'border-box',
       }}
     >
-      {/* HERO SECTION: Asymmetric 2-Column Mission Briefing + Live Site Telemetry Card */}
+      {/* HERO SECTION */}
       <section
         style={{
           position: 'relative',
@@ -130,7 +375,6 @@ function HomeLandingView({
             'radial-gradient(circle at 78% 36%, rgba(14, 165, 233, 0.13), transparent 45%), radial-gradient(circle at 22% 72%, rgba(245, 158, 11, 0.09), transparent 48%), #05080f',
         }}
       >
-        {/* Subtle Aerospace Coordinate Grid Backdrop */}
         <div
           aria-hidden="true"
           style={{
@@ -156,7 +400,6 @@ function HomeLandingView({
             alignItems: 'center',
           }}
         >
-          {/* Left Column: Mission Headline & Action Controls */}
           <div style={{ textAlign: 'left' }}>
             <div
               style={{
@@ -214,7 +457,6 @@ function HomeLandingView({
               <strong style={{ color: '#f8fafc' }}>LUNA AI CAPCOM</strong>.
             </p>
 
-            {/* Primary & Secondary Launch Buttons */}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
               <button
                 type="button"
@@ -271,7 +513,7 @@ function HomeLandingView({
             </div>
           </div>
 
-          {/* Right Column: Live Interactive Landing Zone Telemetry Dossier */}
+          {/* Right Column: Live Target Telemetry & Success Probability Card */}
           <div
             style={{
               background: 'rgba(11, 18, 32, 0.92)',
@@ -303,20 +545,19 @@ function HomeLandingView({
               </div>
               <span
                 style={{
-                  background: 'rgba(250, 204, 21, 0.14)',
-                  border: '1px solid rgba(250, 204, 21, 0.4)',
-                  color: '#facc15',
+                  background: 'rgba(74, 222, 128, 0.14)',
+                  border: '1px solid rgba(74, 222, 128, 0.45)',
+                  color: '#4ade80',
                   borderRadius: 6,
                   padding: '3px 8px',
-                  fontSize: 10,
+                  fontSize: 10.5,
                   fontWeight: 800,
                 }}
               >
-                {selectedSite.program}
+                {probabilityPct.toFixed(0)}% SUCCESS
               </span>
             </div>
 
-            {/* Quick Landing Site Switcher */}
             <div style={{ marginBottom: 14 }}>
               <label
                 htmlFor="hero-site-select"
@@ -351,7 +592,6 @@ function HomeLandingView({
               </select>
             </div>
 
-            {/* 4 Live Deterministic Ephemeris Readouts */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 14 }}>
               <div style={telemetryTileStyle}>
                 <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700 }}>SOLAR ILLUMINATION</span>
@@ -385,6 +625,23 @@ function HomeLandingView({
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               <button
                 type="button"
+                onClick={onOpenProbability}
+                style={{
+                  background: '#1e293b',
+                  color: '#38bdf8',
+                  border: '1px solid #38bdf8',
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  fontSize: 11.5,
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                }}
+              >
+                🎯 Mission Success Audit
+              </button>
+
+              <button
+                type="button"
                 onClick={onOpenSplitCompare}
                 style={{
                   background: '#1e293b',
@@ -398,23 +655,6 @@ function HomeLandingView({
                 }}
               >
                 ⚖️ Compare Two Sites
-              </button>
-
-              <button
-                type="button"
-                onClick={onOpenGame}
-                style={{
-                  background: '#064e3b',
-                  color: '#6ee7b7',
-                  border: '1px solid #059669',
-                  borderRadius: 8,
-                  padding: '8px 10px',
-                  fontSize: 11.5,
-                  fontWeight: 800,
-                  cursor: 'pointer',
-                }}
-              >
-                🛸 Practice Touchdown →
               </button>
             </div>
           </div>
@@ -450,7 +690,6 @@ function HomeLandingView({
               gap: 20,
             }}
           >
-            {/* Card 1 */}
             <div style={{ ...subsystemCardStyle, borderTop: '3px solid #38bdf8' }}>
               <div style={{ fontSize: 22, marginBottom: 10 }}>🌐</div>
               <h3 style={{ margin: '0 0 6px', fontSize: 16.5, fontWeight: 800 }}>
@@ -468,7 +707,6 @@ function HomeLandingView({
               </ul>
             </div>
 
-            {/* Card 2 */}
             <div style={{ ...subsystemCardStyle, borderTop: '3px solid #facc15' }}>
               <div style={{ fontSize: 22, marginBottom: 10 }}>🛰️</div>
               <h3 style={{ margin: '0 0 6px', fontSize: 16.5, fontWeight: 800 }}>
@@ -486,7 +724,6 @@ function HomeLandingView({
               </ul>
             </div>
 
-            {/* Card 3 */}
             <div style={{ ...subsystemCardStyle, borderTop: '3px solid #4ade80' }}>
               <div style={{ fontSize: 22, marginBottom: 10 }}>🤖</div>
               <h3 style={{ margin: '0 0 6px', fontSize: 16.5, fontWeight: 800 }}>
@@ -548,15 +785,15 @@ function HomeLandingView({
               },
               {
                 step: '03',
-                title: 'Powered Descent & Touchdown',
-                desc: 'Pilot the 200 Hz lander through plume dust, sloped crater pads, and system anomalies with LUNA CAPCOM.',
-                accent: '#4ade80',
+                title: 'Mission Success Probability',
+                desc: 'Score landing readiness from location survey status, orbital date lighting, terrain grade, and sunlit hours.',
+                accent: '#c084fc',
               },
               {
                 step: '04',
-                title: 'Deterministic AI Telemetry',
-                desc: 'Inspect verified state vectors via window.__LUNAR_AI_CONTEXT__ for hallucination-free mission analysis.',
-                accent: '#fb923c',
+                title: 'Powered Descent & Touchdown',
+                desc: 'Pilot the 200 Hz lander through plume dust, sloped crater pads, and system anomalies with LUNA CAPCOM.',
+                accent: '#4ade80',
               },
             ].map((stage) => (
               <div
@@ -702,6 +939,7 @@ export function App() {
   const [mastHeightM, setMastHeightM] = useState(2);
   const [panelPreset, setPanelPreset] = useState<PanelPreset>('VERTICAL_TRACKING');
   const [horizonsSyncStatus, setHorizonsSyncStatus] = useState<string>('');
+  const [probStationId, setProbStationId] = useState<DepartureOrbitalId>('ISS');
 
   const selectedSite = useMemo(
     () => allSites.find((s) => s.siteId === selectedSiteId) ?? allSites[0]!,
@@ -736,6 +974,19 @@ export function App() {
     [report.states, selectedTimeIndex, stepHours],
   );
 
+  const missionProbability = useMemo(
+    () =>
+      computeMissionProbability(
+        selectedSite,
+        currentState,
+        report.metrics,
+        missionStartIso,
+        windowDays,
+        probStationId,
+      ),
+    [selectedSite, currentState, report.metrics, missionStartIso, windowDays, probStationId],
+  );
+
   useEffect(() => {
     (window as any).__LUNAR_AI_CONTEXT__ = {
       dataSource: 'DE441 MEAN_ME Analytical Ephemeris + LOLA DEM Horizon Mask (Zero Refraction)',
@@ -752,10 +1003,11 @@ export function App() {
         currentTimestampUtc: currentState.timeUtc,
       },
       summaryMetrics: report.metrics,
+      missionProbability,
       physicsGates: report.gates,
       validationChecks: report.validationChecks,
     };
-  }, [selectedSite, missionStartIso, windowDays, currentState, report]);
+  }, [selectedSite, missionStartIso, windowDays, currentState, report, missionProbability]);
 
   const handleSelectSite = (site: CuratedLunarSite) => {
     setSelectedSiteId(site.siteId);
@@ -807,6 +1059,12 @@ export function App() {
     [report.states],
   );
 
+  // SVG Ring Geometry for Bottom Probability Gauge
+  const gaugeRadius = 42;
+  const gaugeCircumference = 2 * Math.PI * gaugeRadius;
+  const gaugeOffset =
+    gaugeCircumference * (1 - clamp(missionProbability.overallProbabilityPct, 0, 100) / 100);
+
   return (
     <div
       style={{
@@ -823,7 +1081,6 @@ export function App() {
         boxSizing: 'border-box',
       }}
     >
-      {/* Override Vite starter body flex-centering & #root max-width so app always fits 100% edge-to-edge */}
       <style>{`
         html, body, #root {
           margin: 0 !important;
@@ -916,8 +1173,13 @@ export function App() {
           sites={allSites}
           selectedSite={selectedSite}
           metrics={report.metrics}
+          probabilityPct={missionProbability.overallProbabilityPct}
           onSelectSite={handleSelectSite}
           onOpenExplorer={() => setActiveTab('EXPLORER')}
+          onOpenProbability={() => {
+            setActiveTab('EXPLORER');
+            setActivePopup('MISSION_PROB');
+          }}
           onOpenOrbitView={() => {
             setPerspective('ORBITAL_SYSTEM');
             setActiveTab('EXPLORER');
@@ -1019,11 +1281,11 @@ export function App() {
 
             <EdgeHoverActionButton
               side="right"
-              icon="🤖"
-              label="AI Analyst Hook"
-              active={activePopup === 'AI_HOOK'}
-              borderColor="#c084fc"
-              onClick={() => setActivePopup(activePopup === 'AI_HOOK' ? 'NONE' : 'AI_HOOK')}
+              icon="🎯"
+              label="Mission Success Probability"
+              active={activePopup === 'MISSION_PROB'}
+              borderColor="#4ade80"
+              onClick={() => setActivePopup(activePopup === 'MISSION_PROB' ? 'NONE' : 'MISSION_PROB')}
             />
 
             <EdgeHoverActionButton
@@ -1134,8 +1396,8 @@ export function App() {
               <div
                 onClick={(e) => e.stopPropagation()}
                 style={{
-                  width: 'min(92vw, 820px)',
-                  maxHeight: '84vh',
+                  width: 'min(93vw, 880px)',
+                  maxHeight: '86vh',
                   overflowY: 'auto',
                   background: '#0b1220',
                   border: '1px solid #334155',
@@ -1160,7 +1422,7 @@ export function App() {
                   <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800 }}>
                     {activePopup === 'SITES' && '📍 Select Lunar Site or Drop Custom Coordinates'}
                     {activePopup === 'TECH_GRAPHS' && '📊 Technical Ephemeris Graphs & Validation Telemetry'}
-                    {activePopup === 'AI_HOOK' && '🤖 AI Mission Effectiveness Analyst'}
+                    {activePopup === 'MISSION_PROB' && '🎯 Mission Success Probability Dashboard'}
                   </h2>
 
                   <button type="button" onClick={() => setActivePopup('NONE')} style={closeBtnStyle}>
@@ -1389,40 +1651,304 @@ export function App() {
                   </div>
                 )}
 
-                {activePopup === 'AI_HOOK' && (
-                  <div style={{ display: 'grid', gap: 12 }}>
-                    <p style={{ margin: 0, fontSize: 13, color: '#cbd5e1', lineHeight: 1.5 }}>
-                      This module exposes the verified, deterministic telemetry dataset for{' '}
-                      <strong>{selectedSite.name}</strong> over your selected timeframe (
-                      <strong>{missionStartIso.slice(0, 10)}</strong>, {windowDays} days) via{' '}
-                      <code>window.__LUNAR_AI_CONTEXT__</code> so an AI API can evaluate mission effectiveness
-                      strictly from computed ephemeris and LOLA horizon numbers.
-                    </p>
-
-                    <pre
+                {/* DETERMINISTIC MISSION SUCCESS PROBABILITY DASHBOARD */}
+                {activePopup === 'MISSION_PROB' && (
+                  <div style={{ display: 'grid', gap: 14 }}>
+                    {/* 1. Mission Date, Duration & Departure Orbit Parameters */}
+                    <div
                       style={{
                         background: '#060a14',
                         border: '1px solid #1e293b',
-                        borderRadius: 10,
-                        padding: 14,
-                        fontSize: 11,
-                        color: '#7dd3fc',
-                        overflowX: 'auto',
-                        maxHeight: 340,
+                        borderRadius: 12,
+                        padding: 12,
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        gap: 10,
                       }}
                     >
-                      {JSON.stringify(
-                        {
-                          site: selectedSite.name,
-                          coordinates: selectedSite.coordinates,
-                          timeframe: { startUtc: missionStartIso, windowDays },
-                          computedMetrics: report.metrics,
-                          physicsGates: report.gates,
-                        },
-                        null,
-                        2,
-                      )}
-                    </pre>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <label style={{ fontSize: 10.5, fontWeight: 800, color: '#94a3b8' }}>
+                          MISSION START DATE:
+                          <input
+                            type="date"
+                            value={missionStartIso.slice(0, 10)}
+                            onChange={(e) => {
+                              if (e.target.value) {
+                                setMissionStartIso(`${e.target.value}T00:00:00Z`);
+                                setSelectedTimeIndex(0);
+                              }
+                            }}
+                            style={{ ...compactControlStyle, marginLeft: 6 }}
+                          />
+                        </label>
+
+                        <label style={{ fontSize: 10.5, fontWeight: 800, color: '#94a3b8' }}>
+                          DURATION:
+                          <select
+                            value={windowDays}
+                            onChange={(e) => {
+                              setWindowDays(Number(e.target.value));
+                              setSelectedTimeIndex(0);
+                            }}
+                            style={{ ...compactControlStyle, marginLeft: 6 }}
+                          >
+                            <option value={7}>7 Days (Artemis Surface)</option>
+                            <option value={14.77}>14.77 Days (Half Lunar Day)</option>
+                            <option value={29.53}>29.53 Days (Full Lunar Cycle)</option>
+                            <option value={346.6}>346.6 Days (Lunar Year)</option>
+                          </select>
+                        </label>
+                      </div>
+
+                      <label style={{ fontSize: 10.5, fontWeight: 800, color: '#94a3b8' }}>
+                        DEPARTURE ORBIT:
+                        <select
+                          value={probStationId}
+                          onChange={(e) => setProbStationId(e.target.value as DepartureOrbitalId)}
+                          style={{ ...compactControlStyle, marginLeft: 6 }}
+                        >
+                          {(Object.keys(ORBITAL_DEPARTURE_PROFILES) as DepartureOrbitalId[]).map((id) => (
+                            <option key={id} value={id}>
+                              {ORBITAL_DEPARTURE_PROFILES[id].label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+
+                    {/* 2. Core Mission Telemetry Statistics Grid */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))', gap: 10 }}>
+                      <div style={statBox}>
+                        <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700 }}>LOCATION &amp; SURVEY STATUS</span>
+                        <strong
+                          style={{
+                            fontSize: 13.5,
+                            color: missionProbability.isKnownLocation ? '#4ade80' : '#facc15',
+                          }}
+                        >
+                          {missionProbability.isKnownLocation ? '✓ Known Surveyed Site' : '⚠ Unvisited Custom Pin'}
+                        </strong>
+                        <span style={{ fontSize: 10.5, color: '#94a3b8' }}>
+                          {selectedSite.coordinates.latDeg.toFixed(2)}°, {selectedSite.coordinates.lonDeg.toFixed(2)}°E ·
+                          Grade {missionProbability.slopeDeg.toFixed(1)}°
+                        </span>
+                      </div>
+
+                      <div style={statBox}>
+                        <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700 }}>SUNLIGHT RECEIVED</span>
+                        <strong style={{ fontSize: 17, color: '#facc15' }}>
+                          {missionProbability.sunlitHours.toFixed(0)} hrs
+                        </strong>
+                        <span style={{ fontSize: 10.5, color: '#94a3b8' }}>
+                          {report.metrics.illuminationPct.toFixed(1)}% of{' '}
+                          {missionProbability.totalMissionHours.toFixed(0)}h · Yield{' '}
+                          {report.metrics.totalEnergyKwhPerM2.toFixed(0)} kWh/m²
+                        </span>
+                      </div>
+
+                      <div style={statBox}>
+                        <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700 }}>ORBITAL TRANSFER TIMING</span>
+                        <strong style={{ fontSize: 14, color: '#38bdf8' }}>
+                          {missionProbability.transitDays}d Transit
+                        </strong>
+                        <span style={{ fontSize: 10, color: '#94a3b8' }}>
+                          TLI {missionProbability.departureUtcLabel.slice(0, 11)} → Arr{' '}
+                          {missionProbability.arrivalUtcLabel.slice(0, 11)}
+                        </span>
+                      </div>
+
+                      <div style={statBox}>
+                        <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700 }}>TOUCHDOWN &amp; COMMS</span>
+                        <strong
+                          style={{
+                            fontSize: 15,
+                            color: currentState.sunVisible ? '#34d399' : '#f87171',
+                          }}
+                        >
+                          Sun {missionProbability.touchdownSunElDeg.toFixed(1)}°
+                        </strong>
+                        <span style={{ fontSize: 10.5, color: '#94a3b8' }}>
+                          Earth DTE {report.metrics.dteAvailabilityPct.toFixed(1)}% · Max dark{' '}
+                          {report.metrics.longestDarknessHours}h
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* 3. Weighted Factor Breakdown Bars */}
+                    <div
+                      style={{
+                        background: '#060a14',
+                        border: '1px solid #1e293b',
+                        borderRadius: 12,
+                        padding: '12px 14px',
+                        display: 'grid',
+                        gap: 10,
+                      }}
+                    >
+                      <div style={{ fontSize: 10.5, fontWeight: 800, color: '#94a3b8', letterSpacing: '0.06em' }}>
+                        WEIGHTED FACTOR BREAKDOWN
+                      </div>
+
+                      {missionProbability.factors.map((f) => (
+                        <div key={f.id}>
+                          <div
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              fontSize: 11.5,
+                              marginBottom: 4,
+                            }}
+                          >
+                            <span>
+                              <strong style={{ color: '#f8fafc' }}>{f.label}</strong>{' '}
+                              <span style={{ color: '#64748b', fontSize: 10.5 }}>({f.weightPct}% weight)</span>
+                            </span>
+                            <strong style={{ color: f.color, fontVariantNumeric: 'tabular-nums' }}>
+                              {f.scorePct}%
+                            </strong>
+                          </div>
+                          <div style={{ height: 6, background: '#1e293b', borderRadius: 999, overflow: 'hidden' }}>
+                            <div
+                              style={{
+                                width: `${f.scorePct}%`,
+                                height: '100%',
+                                background: f.color,
+                                transition: 'width 200ms ease',
+                              }}
+                            />
+                          </div>
+                          <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 3 }}>{f.detail}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* 4. BOTTOM OVERALL PROBABILITY OF SUCCESS SUMMARY CARD */}
+                    <div
+                      style={{
+                        background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.96), rgba(6, 10, 20, 0.98))',
+                        border: `1.5px solid ${missionProbability.verdictColor}`,
+                        borderRadius: 14,
+                        padding: '16px 18px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        flexWrap: 'wrap',
+                        gap: 18,
+                      }}
+                    >
+                      {/* Circular SVG Probability Gauge */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                        <div style={{ position: 'relative', width: 104, height: 104, flexShrink: 0 }}>
+                          <svg width="104" height="104" viewBox="0 0 104 104">
+                            <circle
+                              cx="52"
+                              cy="52"
+                              r={gaugeRadius}
+                              fill="none"
+                              stroke="#1e293b"
+                              strokeWidth="9"
+                            />
+                            <circle
+                              cx="52"
+                              cy="52"
+                              r={gaugeRadius}
+                              fill="none"
+                              stroke={missionProbability.verdictColor}
+                              strokeWidth="9"
+                              strokeLinecap="round"
+                              strokeDasharray={gaugeCircumference}
+                              strokeDashoffset={gaugeOffset}
+                              transform="rotate(-90 52 52)"
+                            />
+                          </svg>
+                          <div
+                            style={{
+                              position: 'absolute',
+                              inset: 0,
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                            }}
+                          >
+                            <strong
+                              style={{
+                                fontSize: 20,
+                                fontWeight: 900,
+                                color: missionProbability.verdictColor,
+                                fontVariantNumeric: 'tabular-nums',
+                              }}
+                            >
+                              {missionProbability.overallProbabilityPct.toFixed(1)}%
+                            </strong>
+                            <span style={{ fontSize: 8.5, fontWeight: 800, color: '#94a3b8' }}>SUCCESS</span>
+                          </div>
+                        </div>
+
+                        <div>
+                          <div
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 800,
+                              letterSpacing: '0.07em',
+                              color: '#94a3b8',
+                              marginBottom: 3,
+                            }}
+                          >
+                            COMPUTED MISSION PROBABILITY
+                          </div>
+                          <div
+                            style={{
+                              fontSize: 16,
+                              fontWeight: 900,
+                              color: missionProbability.verdictColor,
+                              marginBottom: 6,
+                            }}
+                          >
+                            {missionProbability.verdictLabel}
+                          </div>
+                          <ul
+                            style={{
+                              listStyle: 'none',
+                              margin: 0,
+                              padding: 0,
+                              display: 'grid',
+                              gap: 4,
+                              fontSize: 11,
+                              color: '#cbd5e1',
+                            }}
+                          >
+                            {missionProbability.engineeringNotes.map((note, idx) => (
+                              <li key={idx}>• {note}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActivePopup('NONE');
+                          setActiveTab('GAME');
+                        }}
+                        style={{
+                          background: '#16a34a',
+                          color: '#fff',
+                          border: '1px solid #4ade80',
+                          borderRadius: 10,
+                          padding: '10px 16px',
+                          fontSize: 12,
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        🚀 Test Descent in Sim →
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1470,7 +1996,11 @@ export function App() {
             <span>
               🎯 Active Target Zone: <strong style={{ color: '#facc15' }}>{selectedSite.name}</strong> (
               {selectedSite.coordinates.latDeg.toFixed(2)}°, {selectedSite.coordinates.lonDeg.toFixed(2)}°E · Slope{' '}
-              {(selectedSite.slopeDeg ?? 0).toFixed(1)}°)
+              {(selectedSite.slopeDeg ?? 0).toFixed(1)}° · Computed Success{' '}
+              <strong style={{ color: missionProbability.verdictColor }}>
+                {missionProbability.overallProbabilityPct.toFixed(1)}%
+              </strong>
+              )
             </span>
             <button
               type="button"
