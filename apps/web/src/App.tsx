@@ -1009,6 +1009,20 @@ function HomeLandingView({
                 <span>📐</span>
                 <span>Flight Architecture</span>
               </button>
+
+              <a
+                href="/SkyofSelenaReport.pdf"
+                download="SkyofSelenaReport.pdf"
+                style={{
+                  ...heroOutlineBtnStyle,
+                  textDecoration: 'none',
+                  borderColor: 'rgba(56, 189, 248, 0.45)',
+                  color: '#7dd3fc',
+                }}
+              >
+                <span>📄</span>
+                <span>Project Report (PDF)</span>
+              </a>
             </div>
           </div>
 
@@ -1408,6 +1422,25 @@ function HomeLandingView({
             >
               🚀 Start Lander Simulation
             </button>
+            <a
+              href="/SkyofSelenaReport.pdf"
+              download="SkyofSelenaReport.pdf"
+              style={{
+                background: '#0f172a',
+                color: '#7dd3fc',
+                border: '1px solid rgba(56, 189, 248, 0.45)',
+                borderRadius: 10,
+                padding: '11px 22px',
+                fontSize: 13,
+                fontWeight: 800,
+                textDecoration: 'none',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              📄 Download Full Report (PDF)
+            </a>
           </div>
         </div>
       </section>
